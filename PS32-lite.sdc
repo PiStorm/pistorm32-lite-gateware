@@ -1,17 +1,18 @@
 
 # Efinity Interface Designer SDC
 # Version: 2022.1.226
-# Date: 2022-12-26 09:50
+# Date: 2023-01-07 09:04
 
 # Copyright (C) 2017 - 2022 Efinix Inc. All rights reserved.
 
-# Device: T8Q144
-# Project: PS32-lite-efinix-bringup
-# Timing Model: C4 (final)
+# Device: T20Q144
+# Project: PS32-lite
+# Timing Model: C3 (final)
 
 # PLL Constraints
 #################
 create_clock -period 5.1020 AMIPLL_CLKOUT0
+create_clock -period 70.5000 MC_CLK
 
 # GPIO Constraints
 ####################
@@ -55,8 +56,12 @@ create_clock -period 5.1020 AMIPLL_CLKOUT0
 # set_output_delay -clock <CLOCK> -min <MIN CALCULATION> [get_ports {CTRL_OE_n}]
 # set_output_delay -clock <CLOCK> -max <MAX CALCULATION> [get_ports {DATA_OE_n}]
 # set_output_delay -clock <CLOCK> -min <MIN CALCULATION> [get_ports {DATA_OE_n}]
-# set_output_delay -clock <CLOCK> -max <MAX CALCULATION> [get_ports {PI_IPL_ZERO}]
-# set_output_delay -clock <CLOCK> -min <MIN CALCULATION> [get_ports {PI_IPL_ZERO}]
+# set_output_delay -clock <CLOCK> -max <MAX CALCULATION> [get_ports {PI_IPL[0]}]
+# set_output_delay -clock <CLOCK> -min <MIN CALCULATION> [get_ports {PI_IPL[0]}]
+# set_output_delay -clock <CLOCK> -max <MAX CALCULATION> [get_ports {PI_IPL[1]}]
+# set_output_delay -clock <CLOCK> -min <MIN CALCULATION> [get_ports {PI_IPL[1]}]
+# set_output_delay -clock <CLOCK> -max <MAX CALCULATION> [get_ports {PI_IPL[2]}]
+# set_output_delay -clock <CLOCK> -min <MIN CALCULATION> [get_ports {PI_IPL[2]}]
 # set_output_delay -clock <CLOCK> -max <MAX CALCULATION> [get_ports {PI_KBRESET}]
 # set_output_delay -clock <CLOCK> -min <MIN CALCULATION> [get_ports {PI_KBRESET}]
 # set_output_delay -clock <CLOCK> -max <MAX CALCULATION> [get_ports {PI_TXN_IN_PROGRESS}]

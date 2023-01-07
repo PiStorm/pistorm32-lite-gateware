@@ -5,19 +5,17 @@
  
 module pistorm(
     // Raspberry Pi signals.
-    output          PI_TXN_IN_PROGRESS, // GPIO0
-    output          PI_IPL_ZERO,        // GPIO1
-    input           PI_SER_DAT,         // GPIO2 EMU68
-    input           PI_SER_CLK,         // GPIO3 EMU68
+    output [2:0]    PI_IPL,             // GPIO0..2
+    output          PI_TXN_IN_PROGRESS, // GPIO3
     output          PI_KBRESET,         // GPIO4 EMU68
-    //              //                  // GPIO5 unused
+    input           PI_SER_DAT,         // GPIO5 EMU68
     input           PI_RD,              // GPIO6
     input           PI_WR,              // GPIO7
     input [15:0]    PI_D_IN,            // GPIO[23..8]
     output [15:0]   PI_D_OUT,
     output [15:0]   PI_D_OE,
     input [2:0]     PI_A,               // GPIO[26..24]
-    //              //                  // GPIO27 unused
+    input           PI_SER_CLK,         // GPIO27 EMU68
 
     // Shared data and address bus multiplexing.
     input [31:0]    DA_IN,
@@ -94,7 +92,7 @@ assign clk = AMIPLL_CLKOUT0;
 
 
 // Synchronize clk_rising/clk_falling with MC_CLK.
-reg [1:0] mc_clk_sync;
+(* async_reg = "true" *) reg [1:0] mc_clk_sync;
 
 always @(negedge clk) begin
     mc_clk_sync <= {mc_clk_sync[0], MC_CLK};
@@ -241,7 +239,7 @@ always @(posedge clk) begin
 end
 
 // Synchronize IPL, and handle skew.
-reg [2:0] ipl_sync [1:0];
+(* async_reg = "true" *) reg [2:0] ipl_sync [1:0];
 
 always @(posedge clk) begin
     if (clk_falling) begin
@@ -254,7 +252,8 @@ always @(posedge clk) begin
 end
 
 assign PI_TXN_IN_PROGRESS = req_active;
-assign PI_IPL_ZERO = ipl == 3'd0;
+//assign PI_IPL_ZERO = ipl == 3'd0;
+assign PI_IPL = ~ipl;
 
 // State for current access.
 reg [2:0]   fc;
@@ -328,7 +327,7 @@ localparam [2:0] STATE_MAYBE_TERMINATE_ACCESS = 3'd7;
 
 reg [2:0] state;
 
-reg [1:0] mc_dsack_n_sync;
+(* async_reg = "true" *) reg [1:0] mc_dsack_n_sync;
 reg mc_berr_n_sync;
 reg mc_reset_n_sync;
 
@@ -354,7 +353,7 @@ end
 wire any_termination = |(~{mc_dsack_n_sync, mc_berr_n_sync, mc_reset_n_sync});
 wire terminated_normally = mc_berr_n_sync && mc_reset_n_sync;
 
-reg [1:0] pi_wr_sync;
+(* async_reg = "true" *) reg [1:0] pi_wr_sync;
 
 always @(posedge clk) begin
     pi_wr_sync <= {pi_wr_sync[0], PI_WR};
