@@ -107,6 +107,7 @@ always @(posedge clk) begin
         phase_counter <= phase_counter + 4'd1;
 end
 
+/*
 // These constants must be updated together with the PLL multiplier, currently 12x.
 localparam [3:0] PHASE_CLK_FALLING = 4'd4; // (12/2) - 2
 localparam [3:0] PHASE_CLK_RISING = 4'd10; // 12 - 2
@@ -120,6 +121,41 @@ wire clk_falling_plus_1 = phase_counter == PHASE_CLK_FALLING_PLUS_1;
 wire clk_rising = phase_counter == PHASE_CLK_RISING;
 wire clk_rising_plus_1 = phase_counter == PHASE_CLK_RISING_PLUS_1;
 wire clk_rising_plus_3 = phase_counter == PHASE_CLK_RISING_PLUS_3;
+*/
+/*
+localparam [3:0] PHASE_CLK_FALLING_1 = 4'd2; // (6/2) - 1
+localparam [3:0] PHASE_CLK_FALLING_2 = 4'd8; // 6 + (6/2) - 1
+
+localparam [3:0] PHASE_CLK_RISING_1 = 4'd5; // 6 - 1
+localparam [3:0] PHASE_CLK_RISING_2 = 4'd11; // 6 + 6 - 1
+
+localparam [3:0] PHASE_CLK_FALLING_1_PLUS_1 = 4'd3;
+localparam [3:0] PHASE_CLK_FALLING_2_PLUS_1 = 4'd9;
+localparam [3:0] PHASE_CLK_RISING_1_PLUS_1 = 4'd6;
+localparam [3:0] PHASE_CLK_RISING_2_PLUS_1 = 4'd0;
+localparam [3:0] PHASE_CLK_RISING_1_PLUS_3 = 4'd7; // 4'd8
+localparam [3:0] PHASE_CLK_RISING_2_PLUS_3 = 4'd1; // 4'd2
+*/
+
+
+localparam [3:0] PHASE_CLK_FALLING_1 = 4'd3; // (8/2) - 2
+localparam [3:0] PHASE_CLK_FALLING_2 = 4'd11; // 8 + (8/2) - 2
+
+localparam [3:0] PHASE_CLK_RISING_1 = 4'd7; //  - 1
+localparam [3:0] PHASE_CLK_RISING_2 = 4'd15; // 6 + 6 - 1
+
+localparam [3:0] PHASE_CLK_FALLING_1_PLUS_1 = 4'd4;
+localparam [3:0] PHASE_CLK_FALLING_2_PLUS_1 = 4'd12;
+localparam [3:0] PHASE_CLK_RISING_1_PLUS_1 = 4'd8;
+localparam [3:0] PHASE_CLK_RISING_2_PLUS_1 = 4'd0;
+localparam [3:0] PHASE_CLK_RISING_1_PLUS_3 = 4'd9; // 4'd8
+localparam [3:0] PHASE_CLK_RISING_2_PLUS_3 = 4'd1; // 4'd2
+
+wire clk_falling = (phase_counter == PHASE_CLK_FALLING_1) || (phase_counter == PHASE_CLK_FALLING_2);
+wire clk_falling_plus_1 = (phase_counter == PHASE_CLK_FALLING_1_PLUS_1) || (phase_counter == PHASE_CLK_FALLING_2_PLUS_1);
+wire clk_rising = (phase_counter == PHASE_CLK_RISING_1) || (phase_counter == PHASE_CLK_RISING_2);
+wire clk_rising_plus_1 = (phase_counter == PHASE_CLK_RISING_1_PLUS_1) || (phase_counter == PHASE_CLK_RISING_2_PLUS_1);
+wire clk_rising_plus_3 = (phase_counter == PHASE_CLK_RISING_1_PLUS_3) || (phase_counter == PHASE_CLK_RISING_2_PLUS_3);
 
 // Pi control register.
 reg [14:0] pi_control = 14'b00000000000000;
