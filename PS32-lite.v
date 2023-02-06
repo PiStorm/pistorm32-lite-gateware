@@ -72,7 +72,8 @@ module pistorm(
     input AMIPLL_CLKOUT0
 );
 
-
+localparam [7:0] FW_VERSION = 8'd1;
+localparam [7:0] FW_REVISION = 8'd0;
 
 assign SPARE_OUT[7:2] = 6'b111111;
 assign SPARE_OE =  8'b11111111;
@@ -82,8 +83,6 @@ assign SPARE_OUT[0] = PI_SER_DAT;
 assign SPARE_OUT[1] = PI_SER_CLK;
 assign PI_KBRESET = KBRESET;
 
-
-
 // ## Main clock.
 wire clk;
 
@@ -92,70 +91,25 @@ assign clk = AMIPLL_CLKOUT0;
 
 
 // Synchronize clk_rising/clk_falling with MC_CLK.
-(* async_reg = "true" *) reg [1:0] mc_clk_sync;
+(* async_reg = "true" *) reg [2:0] mc_clk_sync;
 
 always @(negedge clk) begin
-    mc_clk_sync <= {mc_clk_sync[0], MC_CLK};
+    mc_clk_sync <= {mc_clk_sync[1:0], MC_CLK};
 end
 
-reg [3:0] phase_counter;
+localparam [2:0] CLK_RISING_MARKER = 3'b001;
+localparam [2:0] CLK_FALLING_MARKER = 3'b110;
+
+// Markers of falling and rising MC CLK
+wire clk_falling = (mc_clk_sync == CLK_FALLING_MARKER);
+wire clk_rising = (mc_clk_sync == CLK_RISING_MARKER);
+
+reg mc_sclk;
 
 always @(posedge clk) begin
-    if (mc_clk_sync == 2'b01)
-        phase_counter <= 4'd0;
-    else
-        phase_counter <= phase_counter + 4'd1;
+    if (clk_rising) mc_sclk <= 1'b1;
+    else if (clk_falling) mc_sclk <= 1'b0;
 end
-
-/*
-// These constants must be updated together with the PLL multiplier, currently 12x.
-localparam [3:0] PHASE_CLK_FALLING = 4'd4; // (12/2) - 2
-localparam [3:0] PHASE_CLK_RISING = 4'd10; // 12 - 2
-
-localparam [3:0] PHASE_CLK_FALLING_PLUS_1 = 4'd5;
-localparam [3:0] PHASE_CLK_RISING_PLUS_1 = 4'd11;
-localparam [3:0] PHASE_CLK_RISING_PLUS_3 = 4'd1;
-
-wire clk_falling = phase_counter == PHASE_CLK_FALLING;
-wire clk_falling_plus_1 = phase_counter == PHASE_CLK_FALLING_PLUS_1;
-wire clk_rising = phase_counter == PHASE_CLK_RISING;
-wire clk_rising_plus_1 = phase_counter == PHASE_CLK_RISING_PLUS_1;
-wire clk_rising_plus_3 = phase_counter == PHASE_CLK_RISING_PLUS_3;
-*/
-/*
-localparam [3:0] PHASE_CLK_FALLING_1 = 4'd2; // (6/2) - 1
-localparam [3:0] PHASE_CLK_FALLING_2 = 4'd8; // 6 + (6/2) - 1
-
-localparam [3:0] PHASE_CLK_RISING_1 = 4'd5; // 6 - 1
-localparam [3:0] PHASE_CLK_RISING_2 = 4'd11; // 6 + 6 - 1
-
-localparam [3:0] PHASE_CLK_FALLING_1_PLUS_1 = 4'd3;
-localparam [3:0] PHASE_CLK_FALLING_2_PLUS_1 = 4'd9;
-localparam [3:0] PHASE_CLK_RISING_1_PLUS_1 = 4'd6;
-localparam [3:0] PHASE_CLK_RISING_2_PLUS_1 = 4'd0;
-localparam [3:0] PHASE_CLK_RISING_1_PLUS_3 = 4'd7; // 4'd8
-localparam [3:0] PHASE_CLK_RISING_2_PLUS_3 = 4'd1; // 4'd2
-*/
-
-
-localparam [3:0] PHASE_CLK_FALLING_1 = 4'd3; // (8/2) - 2
-localparam [3:0] PHASE_CLK_FALLING_2 = 4'd11; // 8 + (8/2) - 2
-
-localparam [3:0] PHASE_CLK_RISING_1 = 4'd7; //  - 1
-localparam [3:0] PHASE_CLK_RISING_2 = 4'd15; // 6 + 6 - 1
-
-localparam [3:0] PHASE_CLK_FALLING_1_PLUS_1 = 4'd4;
-localparam [3:0] PHASE_CLK_FALLING_2_PLUS_1 = 4'd12;
-localparam [3:0] PHASE_CLK_RISING_1_PLUS_1 = 4'd8;
-localparam [3:0] PHASE_CLK_RISING_2_PLUS_1 = 4'd0;
-localparam [3:0] PHASE_CLK_RISING_1_PLUS_3 = 4'd9; // 4'd8
-localparam [3:0] PHASE_CLK_RISING_2_PLUS_3 = 4'd1; // 4'd2
-
-wire clk_falling = (phase_counter == PHASE_CLK_FALLING_1) || (phase_counter == PHASE_CLK_FALLING_2);
-wire clk_falling_plus_1 = (phase_counter == PHASE_CLK_FALLING_1_PLUS_1) || (phase_counter == PHASE_CLK_FALLING_2_PLUS_1);
-wire clk_rising = (phase_counter == PHASE_CLK_RISING_1) || (phase_counter == PHASE_CLK_RISING_2);
-wire clk_rising_plus_1 = (phase_counter == PHASE_CLK_RISING_1_PLUS_1) || (phase_counter == PHASE_CLK_RISING_2_PLUS_1);
-wire clk_rising_plus_3 = (phase_counter == PHASE_CLK_RISING_1_PLUS_3) || (phase_counter == PHASE_CLK_RISING_2_PLUS_3);
 
 // Pi control register.
 reg [14:0] pi_control = 14'b00000000000000;
@@ -246,7 +200,7 @@ reg [31:0]  req_data_write;
 reg [31:0]  req_data_read;
 reg [23:0]  req_address;
 reg [2:0]   req_fc;
-reg [1:0]   req_size; // 0->8b, 1->16b, 3->32b.
+reg [1:0]   req_size; // 0->8b, 1->16b, 3->32b
 reg         req_rw; // 0->Write, 1->Read.
 reg         req_active;
 reg         req_terminated_normally;
@@ -267,24 +221,21 @@ always @(posedge clk) begin
 end
 
 // Sample RESET, HALT.
-always @(posedge clk) begin
-    if (clk_falling) begin
-        reset_sync <= !MC_RESET_n_IN;
-        halt_sync <= !MC_HALT_n_IN;
-    end
+always @(negedge mc_sclk) begin
+    reset_sync <= !MC_RESET_n_IN;
+    halt_sync <= !MC_HALT_n_IN;
 end
 
 // Synchronize IPL, and handle skew.
 (* async_reg = "true" *) reg [2:0] ipl_sync [1:0];
 
-always @(posedge clk) begin
-    if (clk_falling) begin
-        ipl_sync[0] <= ~MC_IPL_n;
-        ipl_sync[1] <= ipl_sync[0];
+always @(negedge mc_sclk) begin
+    ipl_sync[0] <= ~MC_IPL_n;
+    ipl_sync[1] <= ipl_sync[0];
 
-        if (ipl_sync[0] == ipl_sync[1])
-            ipl <= ipl_sync[0];
-    end
+    // Two subsequent **same** reads are regarded as valid
+    if (ipl_sync[0] == ipl_sync[1])
+        ipl <= ipl_sync[0];
 end
 
 assign PI_TXN_IN_PROGRESS = req_active;
@@ -298,14 +249,8 @@ reg [1:0]   size;       // 0->8b, 1->16b, 3->32b.
 reg         rw;         // 0->Write, 1->Read.
 reg [31:0]  data_write;
 reg [1:0]   port_width; // 0->8b, 1->16b, 3->32b.
-wire [1:0]  left_shift = address[1:0] & port_width;
-wire [1:0]  transfered = port_width - left_shift;
 
-reg [7:0]   data_read_op0;
-reg [7:0]   data_read_op1;
-reg [7:0]   data_read_op2;
-reg [7:0]   data_read_op3;
-wire [31:0] data_read = {data_read_op0, data_read_op1, data_read_op2, data_read_op3};
+reg [31:0] data_read;
 
 wire [7:0]  op0_wr;
 wire [7:0]  op1_wr;
@@ -325,6 +270,7 @@ localparam [2:0] PI_REG_ADDR_LO = 3'd2;
 localparam [2:0] PI_REG_ADDR_HI = 3'd3;
 localparam [2:0] PI_REG_STATUS = 3'd4;
 localparam [2:0] PI_REG_CONTROL = 3'd4;
+localparam [2:0] PI_REG_VERSION = 3'd7;
 
 reg [15:0] pi_data_OUT;
 assign PI_D_OUT = pi_data_OUT;
@@ -345,35 +291,54 @@ always @(*) begin
         PI_REG_DATA_LO: pi_data_OUT <= req_data_read[15:0];
         PI_REG_DATA_HI: pi_data_OUT <= req_data_read[31:16];
         PI_REG_ADDR_LO: pi_data_OUT <= address[15:0];
-        PI_REG_ADDR_HI: pi_data_OUT <= {2'd0, req_fc, req_rw, req_size, address[23:16]};
+        PI_REG_ADDR_HI: pi_data_OUT <= {req_transfer_count[1:0], req_fc, req_rw, req_size[1:0], address[23:16]};
         PI_REG_STATUS: pi_data_OUT <= pi_status;
+        PI_REG_VERSION: pi_data_OUT <= { FW_VERSION, FW_REVISION };
         default: pi_data_OUT <= 16'bx;
     endcase
 end
 
 // ## Access state machine.
-localparam [2:0] STATE_WAIT_ACTIVE_REQUEST = 3'd0;
-localparam [2:0] STATE_WAIT_BUS_CYCLE_START = 3'd1;
-localparam [2:0] STATE_WAIT_ASSERT_AS = 3'd2;
-localparam [2:0] STATE_WAIT_OPEN_DATA_LATCH = 3'd3;
-localparam [2:0] STATE_WAIT_TERMINATION = 3'd4;
-localparam [2:0] STATE_WAIT_LATCH_DATA = 3'd5;
-localparam [2:0] STATE_UPDATE_DATA_READ = 3'd6;
-localparam [2:0] STATE_MAYBE_TERMINATE_ACCESS = 3'd7;
+//localparam [2:0] STATE_WAIT_ACTIVE_REQUEST = 3'd0;
+//localparam [2:0] STATE_WAIT_BUS_CYCLE_START = 3'd1;
+//localparam [2:0] STATE_WAIT_ASSERT_AS = 3'd2;
+//localparam [2:0] STATE_WAIT_OPEN_DATA_LATCH = 3'd3;
+//localparam [2:0] STATE_WAIT_TERMINATION = 3'd4;
+//localparam [2:0] STATE_WAIT_LATCH_DATA = 3'd5;
+//localparam [2:0] STATE_UPDATE_DATA_READ = 3'd6;
+//localparam [2:0] STATE_MAYBE_TERMINATE_ACCESS = 3'd7;
 
-reg [2:0] state;
+localparam [3:0] STATE_IDLE = 'd00;
+localparam [3:0] STATE_S0   = 'd01;
+localparam [3:0] STATE_S1   = 'd02;
+localparam [3:0] STATE_S2   = 'd03;
+localparam [3:0] STATE_S3   = 'd04;
+localparam [3:0] STATE_S4   = 'd05;
+localparam [3:0] STATE_S5   = 'd06;
+localparam [3:0] STATE_S0A  = 'd07;
+localparam [3:0] STATE_S0B  = 'd08;
+
+localparam SIZ_1 = 'b01;
+localparam SIZ_2 = 'b10;
+localparam SIZ_3 = 'b11;
+localparam SIZ_4 = 'b00;
+
+localparam DSACK_8BIT = 2'b10;
+localparam DSACK_16BIT = 2'b01;
+localparam DSACK_32BIT = 2'b00;
+localparam DSACK_WAIT = 2'b11;
+
+reg [3:0] state;
 
 (* async_reg = "true" *) reg [1:0] mc_dsack_n_sync;
 reg mc_berr_n_sync;
 reg mc_reset_n_sync;
 
-always @(posedge clk) begin
-    if (clk_falling) begin
-        mc_data_read <= DA_IN;
-        mc_dsack_n_sync <= MC_DSACK_n;
-        mc_berr_n_sync <= MC_BERR_n;
-        mc_reset_n_sync <= MC_RESET_n_IN;
-    end
+always @(negedge mc_sclk) begin
+    mc_data_read <= DA_IN;
+    mc_dsack_n_sync <= MC_DSACK_n;
+    mc_berr_n_sync <= MC_BERR_n;
+    mc_reset_n_sync <= MC_RESET_n_IN;
 end
 
 always @(*) begin
@@ -391,12 +356,26 @@ wire terminated_normally = mc_berr_n_sync && mc_reset_n_sync;
 
 (* async_reg = "true" *) reg [1:0] pi_wr_sync;
 
+reg [1:0] req_transfer_count;
+reg req_completed;
+reg [2:0] transferred;
+
 always @(posedge clk) begin
     pi_wr_sync <= {pi_wr_sync[0], PI_WR};
 
     if (pi_wr_sync == 2'b10) begin
         case (PI_A)
-            PI_REG_DATA_LO: req_data_write[15:0] <= PI_D_IN;
+            PI_REG_DATA_LO: begin
+                req_data_write[15:0] <= PI_D_IN;
+                if (req_transfer_count != 0) begin
+                    req_transfer_count <= req_transfer_count - 1;
+                    req_completed <= 'b0;
+                    req_active <= 'b1;
+                    size <= req_size;
+                    data_write <= req_data_write;
+                    state <= STATE_S0;
+                end
+            end
             PI_REG_DATA_HI: req_data_write[31:16] <= PI_D_IN;
             PI_REG_ADDR_LO: req_address[15:0] <= PI_D_IN;
             PI_REG_ADDR_HI: begin
@@ -404,7 +383,10 @@ always @(posedge clk) begin
                 req_size <= PI_D_IN[9:8];
                 req_rw <= PI_D_IN[10];
                 req_fc <= PI_D_IN[13:11];
+                req_transfer_count <= PI_D_IN[15:14];
                 req_active <= 1'b1;
+                req_completed <= 'b0;
+                state <= STATE_IDLE;
             end
             PI_REG_CONTROL: begin
                 if (PI_D_IN[15])
@@ -414,26 +396,317 @@ always @(posedge clk) begin
             end
         endcase
     end
-
-    if (req_delay_deactivate)
-        req_active <= 1'b0;
-
+    
+    if (req_delay_deactivate) req_active <= 1'b0;
+    
     req_delay_deactivate <= 1'b0;
-
+    
     case (state)
-        STATE_WAIT_ACTIVE_REQUEST: begin
+        STATE_IDLE: begin
             if (clk_rising)
                 da_state <= DA_STATE_IDLE;
-
+            
             if (req_active && !req_delay_deactivate) begin
                 fc <= req_fc;
                 address <= req_address;
                 size <= req_size;
                 rw <= req_rw;
                 data_write <= req_data_write;
-                state <= STATE_WAIT_BUS_CYCLE_START;
+                state <= STATE_S0;
             end
         end
+        
+        STATE_S0: begin
+            if (clk_rising) begin
+                da_state <= DA_STATE_IDLE;
+
+                mc_fc <= fc;
+                mc_address <= address;
+                mc_rw <= rw;
+                mc_size <= size + 1;
+                /*case (size)
+                    2'd0: mc_size <= SIZ_1;
+                    2'd1: mc_size <= SIZ_2;
+                    2'd2: mc_size <= SIZ_3;
+                    2'd3: mc_size <= SIZ_4;
+                endcase*/
+                
+                state <= STATE_S0A;
+            end
+        end
+        
+        STATE_S0A: begin
+            da_state <= DA_STATE_FPGA_TO_ADDR;
+            address_latch_le <= 1'b1;
+            state <= STATE_S0B;
+        end
+        
+        STATE_S0B: begin
+            address_latch_le <= 1'b0;
+            state <= STATE_S1;
+        end
+        
+        STATE_S1: begin
+            if (clk_falling) begin
+                mc_as <= 1'b0;
+                da_state <= DA_STATE_IDLE;
+                state <= STATE_S2;
+                if (rw) mc_ds <= 1'b0;
+            end
+        end
+                      
+        STATE_S2: begin
+            if (clk_rising) begin
+                if (rw) da_state <= DA_STATE_DATA_TO_FPGA;
+                else begin
+                    case (mc_size)
+                        SIZ_1: mc_data_write <= { op3_wr, op3_wr, op3_wr, op3_wr };
+                        SIZ_2: begin
+                            case (mc_address[0])
+                                1'b0: mc_data_write <= {op2_wr, op3_wr, op2_wr, op3_wr};
+                                1'b1: mc_data_write <= {op2_wr, op2_wr, op3_wr, op2_wr};
+                            endcase
+                        end
+                        SIZ_3: begin
+                            case (mc_address[1:0])
+                                2'd0: mc_data_write <= {op1_wr, op2_wr, op3_wr, /* op0_wr */ 8'bx };
+                                2'd1: mc_data_write <= {op1_wr, op1_wr, op2_wr, op3_wr};
+                                2'd2: mc_data_write <= {op1_wr, op2_wr, op1_wr, op2_wr};
+                                2'd3: mc_data_write <= {op1_wr, op1_wr, /* op2_wr */ 8'bx , op1_wr};
+                            endcase
+                        end
+                        SIZ_4: begin
+                            case (mc_address[1:0])
+                                2'd0: mc_data_write <= {op0_wr, op1_wr, op2_wr, op3_wr};
+                                2'd1: mc_data_write <= {op0_wr, op0_wr, op1_wr, op2_wr};
+                                2'd2: mc_data_write <= {op0_wr, op1_wr, op0_wr, op1_wr};
+                                2'd3: mc_data_write <= {op0_wr, op0_wr, /* op1_wr */ 8'bx, op0_wr};
+                            endcase
+                        end
+                    endcase
+                end
+                state <= STATE_S3;
+            end
+        end
+
+        STATE_S3: begin
+            if (!rw) da_state <= DA_STATE_FPGA_TO_DATA;
+            if (clk_falling) begin
+                if (mc_dsack_n_sync != DSACK_WAIT) state <= STATE_S4;
+            end
+        end
+        
+        STATE_S4: begin
+            if (clk_rising) begin
+                if (rw) begin
+                    case (mc_size)
+                        SIZ_4: begin
+                            if (mc_dsack_n_sync == DSACK_32BIT) begin
+                                case (mc_address[1:0])
+                                    2'b00: data_read <= mc_data_read;
+                                    2'b01: data_read[31:8] <= mc_data_read[23:0];
+                                    2'b10: data_read[31:16] <= mc_data_read[15:0];
+                                    2'b11: data_read[31:24] <= mc_data_read[7:0];
+                                endcase
+                            end
+                            else if (mc_dsack_n_sync == DSACK_16BIT) begin
+                                case (mc_address[0])
+                                    1'b0: data_read <= mc_data_read[31:16];
+                                    1'b1: data_read[31:24] <= mc_data_read[23:16];
+                                endcase
+                            end
+                            else data_read[31:24] <= mc_data_read[31:24];
+                        end
+                        SIZ_3: begin
+                            if (mc_dsack_n_sync == DSACK_32BIT) begin
+                                case (mc_address[1:0])
+                                    2'b00: data_read[23:0] <= mc_data_read[31:8];
+                                    2'b01: data_read[23:0] <= mc_data_read[23:0];
+                                    2'b10: data_read[23:8] <= mc_data_read[15:0];
+                                    2'b11: data_read[23:16] <= mc_data_read[7:0];
+                                endcase
+                            end
+                            else if (mc_dsack_n_sync == DSACK_16BIT) begin
+                                case (mc_address[0])
+                                    1'b0: data_read[23:8] <= mc_data_read[31:16];
+                                    1'b1: data_read[23:16] <= mc_data_read[23:16];
+                                endcase
+                            end
+                            else data_read[23:16] <= mc_data_read[31:24];
+                        end
+                        SIZ_2: begin
+                            if (mc_dsack_n_sync == DSACK_32BIT) begin
+                                case (mc_address[1:0])
+                                    2'b00: data_read[15:0] <= mc_data_read[31:16];
+                                    2'b01: data_read[15:0] <= mc_data_read[23:8];
+                                    2'b10: data_read[15:0] <= mc_data_read[15:0];
+                                    2'b11: data_read[15:8] <= mc_data_read[7:0];
+                                endcase
+                            end
+                            else if (mc_dsack_n_sync == DSACK_16BIT) begin
+                                case (mc_address[0])
+                                    1'b0: data_read[15:0] <= mc_data_read[31:16];
+                                    1'b1: data_read[15:8] <= mc_data_read[23:16];
+                                endcase
+                            end
+                            else data_read[15:8] <= mc_data_read[31:24];
+                        end
+                        SIZ_1: begin
+                            if (mc_dsack_n_sync == DSACK_32BIT) begin
+                                case (mc_address[1:0])
+                                    2'b00: data_read[7:0] <= mc_data_read[31:24];
+                                    2'b01: data_read[7:0] <= mc_data_read[23:16];
+                                    2'b10: data_read[7:0] <= mc_data_read[15:8];
+                                    2'b11: data_read[7:0] <= mc_data_read[7:0];
+                                endcase
+                            end
+                            else if (mc_dsack_n_sync == DSACK_16BIT) begin
+                                case (mc_address[0])
+                                    1'b0: data_read[7:0] <= mc_data_read[31:24];
+                                    1'b1: data_read[7:0] <= mc_data_read[23:16];
+                                endcase
+                            end
+                            else data_read[7:0] <= mc_data_read[31:24];
+                        end
+                    endcase
+                end
+            
+                /* Check if transfer is still in progress or if it can be completed */
+                state <= STATE_S5;
+                case (mc_size)
+                    SIZ_4: begin
+                        if (mc_dsack_n_sync == DSACK_32BIT) begin
+                            case (mc_address[1:0])
+                                2'b00: begin
+                                    req_completed <= 'b1;
+                                    transferred <= 'd4;
+                                end
+                                2'b01: begin
+                                    size <= 0;
+                                    transferred <= 'd3;
+                                end
+                                2'b10: begin
+                                    size <= 1;
+                                    transferred <= 'd2;
+                                end
+                                2'b11: begin
+                                    size <= 2;
+                                    transferred <= 'd1;
+                                end
+                            endcase
+                        end
+                        else if (mc_dsack_n_sync == DSACK_16BIT) begin
+                            case (mc_address[0])
+                                1'b0: begin
+                                    size <= 1;
+                                    transferred <= 'd2;
+                                end
+                                1'b1: begin
+                                    size <= 2;
+                                    transferred <= 'd1;
+                                end
+                            endcase
+                        end
+                        else begin
+                            size <= 2;
+                            transferred <= 'd1;
+                        end
+                    end
+                    SIZ_3: begin
+                        if (mc_dsack_n_sync == DSACK_32BIT) begin
+                            case (mc_address[1:0])
+                                2'b10: begin
+                                    size <= 0;
+                                    transferred <= 'd2;
+                                end
+                                2'b11: begin
+                                    size <= 1;
+                                    transferred <= 'd1;
+                                end
+                                default: begin
+                                    req_completed <= 'b1;
+                                    transferred <= 'd3;
+                                end
+                            endcase
+                        end
+                        else if (mc_dsack_n_sync == DSACK_16BIT) begin
+                            case (mc_address[0])
+                                1'b0: begin
+                                    size <= 0;
+                                    transferred <= 'd2;
+                                end
+                                1'b1: begin
+                                    size <= 1;
+                                    transferred <= 'd1;
+                                end
+                            endcase
+                        end
+                        else begin
+                            size <= 1;
+                            transferred <= 'd1;
+                        end
+                    end
+                    SIZ_2: begin
+                        if (mc_dsack_n_sync == DSACK_32BIT) begin
+                            case (mc_address[1:0])
+                                2'b11: begin
+                                    size <= 0;
+                                    transferred <= 'd1;
+                                end
+                                default: begin
+                                    req_completed <= 'b1;
+                                    transferred <= 'd2;
+                                end
+                            endcase
+                        end
+                        else if (mc_dsack_n_sync == DSACK_16BIT) begin
+                            case (mc_address[0])
+                                1'b0: begin
+                                    req_completed <= 'b1;
+                                    transferred <= 'd2;
+                                end
+                                1'b1: begin
+                                    size <= 0;
+                                    transferred <= 'd1;
+                                end
+                            endcase
+                        end
+                        else begin
+                            size <= 0;
+                            transferred <= 'd1;
+                        end
+                    end
+                    SIZ_1: begin
+                        req_completed <= 'b1;
+                        transferred <= 'd1;
+                    end
+                endcase
+            end
+        end
+        
+        STATE_S5: begin
+            if (clk_falling) begin
+                mc_as <= 1'b1;
+                mc_ds <= 1'b1;
+                da_state <= DA_STATE_IDLE;
+                
+                if (req_completed) begin
+                    req_data_read <= data_read;
+                    req_terminated_normally <= terminated_normally;
+                    req_delay_deactivate <= 1'b1;
+                    //req_active <= 1'b0;
+                    if (req_transfer_count != 0) address <= address + { 21'b0, transferred };
+                    state <= STATE_IDLE;
+                end else begin
+                    address <= address + {21'b0, transferred};
+                    state <= STATE_S0;
+                end
+            end
+        end
+
+        
+        
+    /*
         STATE_WAIT_BUS_CYCLE_START: begin
             if (clk_rising) begin // Entering S0
                 da_state <= DA_STATE_IDLE;
@@ -635,6 +908,7 @@ always @(posedge clk) begin
                 state <= STATE_WAIT_BUS_CYCLE_START;
             end
         end
+        */
     endcase
 end
 
