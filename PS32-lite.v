@@ -98,16 +98,23 @@ always @(negedge clk) begin
     mc_clk_sync <= {mc_clk_sync[0], MC_CLK};
 end
 
-reg [3:0] phase_counter;
+reg [3:0] phase_counter_rising;
+reg [3:0] phase_counter_falling;reg [3:0] phase_counter_rising;
 
 always @(posedge clk) begin
     if (mc_clk_sync == 2'b01)
-        phase_counter <= 4'd0;
+        phase_counter_rising <= 4'd0;
     else
-        phase_counter <= phase_counter + 4'd1;
+        phase_counter_rising <= phase_counter_rising + 4'd1;
+    
+    if (mc_clk_sync == 2'b10)
+        phase_counter_falling <= 4'd0;
+    else
+        phase_counter_falling <= phase_counter_falling + 4'd1;
 end
 
 // These constants must be updated together with the PLL multiplier, currently 12x.
+/*
 localparam [3:0] PHASE_CLK_FALLING = 4'd4; // (12/2) - 2
 localparam [3:0] PHASE_CLK_RISING = 4'd10; // 12 - 2
 
@@ -120,6 +127,13 @@ wire clk_falling_plus_1 = phase_counter == PHASE_CLK_FALLING_PLUS_1;
 wire clk_rising = phase_counter == PHASE_CLK_RISING;
 wire clk_rising_plus_1 = phase_counter == PHASE_CLK_RISING_PLUS_1;
 wire clk_rising_plus_3 = phase_counter == PHASE_CLK_RISING_PLUS_3;
+*/
+
+wire clk_falling = phase_counter_falling == 4'd0;
+wire clk_falling_plus_1 = phase_counter_falling == 4'd1;
+wire clk_rising = phase_counter_rising == 4'd0;
+wire clk_rising_plus_1 = phase_counter_rising == 4'd1;
+wire clk_rising_plus_3 = phase_counter_rising == 4'd3;
 
 // Pi control register.
 reg [14:0] pi_control = 14'b00000000000000;
@@ -231,24 +245,24 @@ always @(posedge clk) begin
 end
 
 // Sample RESET, HALT.
-always @(posedge clk) begin
-    if (clk_falling) begin
+always @(posedge clk_falling) begin
+    //if (clk_falling) begin
         reset_sync <= !MC_RESET_n_IN;
         halt_sync <= !MC_HALT_n_IN;
-    end
+    //end
 end
 
 // Synchronize IPL, and handle skew.
 (* async_reg = "true" *) reg [2:0] ipl_sync [1:0];
 
-always @(posedge clk) begin
-    if (clk_falling) begin
+always @(posedge clk_falling) begin
+    //if (clk_falling) begin
         ipl_sync[0] <= ~MC_IPL_n;
         ipl_sync[1] <= ipl_sync[0];
 
         if (ipl_sync[0] == ipl_sync[1])
             ipl <= ipl_sync[0];
-    end
+    //end
 end
 
 assign PI_TXN_IN_PROGRESS = req_active;
@@ -331,13 +345,13 @@ reg [2:0] state;
 reg mc_berr_n_sync;
 reg mc_reset_n_sync;
 
-always @(posedge clk) begin
-    if (clk_falling) begin
+always @(posedge clk_falling) begin
+    //if (clk_falling) begin
         mc_data_read <= DA_IN;
         mc_dsack_n_sync <= MC_DSACK_n;
         mc_berr_n_sync <= MC_BERR_n;
         mc_reset_n_sync <= MC_RESET_n_IN;
-    end
+    //end
 end
 
 always @(*) begin
@@ -483,7 +497,6 @@ always @(posedge clk) begin
 			    if (!rw)
                     da_state <= DA_STATE_FPGA_TO_DATA;
    
-
             if (clk_falling_plus_1 && any_termination)
                 state <= STATE_WAIT_LATCH_DATA;
         end
@@ -584,13 +597,14 @@ always @(posedge clk) begin
             state <= STATE_MAYBE_TERMINATE_ACCESS;
         end
         STATE_MAYBE_TERMINATE_ACCESS: begin
-        			if (!rw)
-                    da_state <= DA_STATE_FPGA_TO_DATA;
+            if (!rw)
+                da_state <= DA_STATE_FPGA_TO_DATA;
                     
             if (!terminated_normally || terminated_normally && size <= transfered) begin
                 req_data_read <= data_read;
                 req_terminated_normally <= terminated_normally;
                 req_delay_deactivate <= 1'b1;
+                //req_active <= 1'b0;
                 state <= STATE_WAIT_ACTIVE_REQUEST;
             end else begin
                 // Perform another bus cycle for this access.
