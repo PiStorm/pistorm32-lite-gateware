@@ -448,10 +448,10 @@ always @(posedge clk) begin
         
         STATE_S1: begin
             if (clk_falling) begin
-                mc_as <= 1'b0;
+                mc_as <= 1'b1;
                 da_state <= DA_STATE_IDLE;
                 state <= STATE_S2;
-                if (rw) mc_ds <= 1'b0;
+                if (rw) mc_ds <= 1'b1;
             end
         end
                       
@@ -686,8 +686,8 @@ always @(posedge clk) begin
         
         STATE_S5: begin
             if (clk_falling) begin
-                mc_as <= 1'b1;
-                mc_ds <= 1'b1;
+                mc_as <= 1'b0;
+                mc_ds <= 1'b0;
                 da_state <= DA_STATE_IDLE;
                 
                 if (req_completed) begin
