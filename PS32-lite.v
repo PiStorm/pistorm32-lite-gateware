@@ -72,8 +72,6 @@ module pistorm(
     input AMIPLL_CLKOUT0
 );
 
-
-
 assign SPARE_OUT[7:2] = 6'b111111;
 assign SPARE_OE =  8'b11111111;
 
@@ -82,14 +80,11 @@ assign SPARE_OUT[0] = PI_SER_DAT;
 assign SPARE_OUT[1] = PI_SER_CLK;
 assign PI_KBRESET = KBRESET;
 
-
-
 // ## Main clock.
 wire clk;
 
 // Connect the PLL.
 assign clk = AMIPLL_CLKOUT0;
-
 
 // Synchronize clk_rising/clk_falling with MC_CLK.
 (* async_reg = "true" *) reg [1:0] mc_clk_sync;
@@ -122,12 +117,13 @@ wire clk_rising_plus_1 = phase_counter == PHASE_CLK_RISING_PLUS_1;
 wire clk_rising_plus_3 = phase_counter == PHASE_CLK_RISING_PLUS_3;
 
 // Pi control register.
-reg [14:0] pi_control = 14'b00000000000000;
+reg [14:0] pi_control = 15'b000000;
 wire request_bm = pi_control[0];
 wire drive_reset = pi_control[1];
 wire drive_halt = pi_control[2];
-wire drive_INt2 = pi_control[3];
-wire drive_INt6 = pi_control[4];
+wire drive_int2 = pi_control[3];
+wire drive_int6 = pi_control[4];
+wire increment_execute_slot_pointer = pi_control[5];
 
 // ### MC bus signals.
 assign MC_BR_n_OUT = 1'b0;
@@ -137,9 +133,9 @@ assign MC_RESET_n_OE = drive_reset;
 assign MC_HALT_n_OUT = 1'b0;
 assign MC_HALT_n_OE = drive_halt;
 assign INT2_n_OUT = 1'b0;
-assign INT2_n_OE = drive_INt2;
+assign INT2_n_OE = drive_int2;
 assign INT6_n_OUT = 1'b0;
-assign INT6_n_OE = drive_INt6;
+assign INT6_n_OE = drive_int6;
 
 reg is_bm;
 reg reset_sync;
@@ -184,37 +180,37 @@ assign CTRL_OE_n = 1'b0;
 assign DATA_OE_n = !(da_state == DA_STATE_DATA_TO_FPGA || da_state == DA_STATE_FPGA_TO_DATA);
 
 // Address scrambling on PCB
-wire [31:0] da_address;
-wire [31:0] s_mc_address;
-assign s_mc_address = {8'd0, mc_address};
-assign da_address = {                          
-                    s_mc_address[31],s_mc_address[30],s_mc_address[12],s_mc_address[13],// 31:28
-					s_mc_address[7],s_mc_address[6],s_mc_address[15],s_mc_address[14],	// 27:24
-					s_mc_address[29],s_mc_address[28],s_mc_address[26],s_mc_address[27],// 23:20
-					s_mc_address[16],s_mc_address[17],s_mc_address[5],s_mc_address[4],	// 19:16
-					s_mc_address[19],s_mc_address[18],s_mc_address[25],s_mc_address[24],// 15:12
-					s_mc_address[8],s_mc_address[9],s_mc_address[22],s_mc_address[23],	// 11:8
-					s_mc_address[3],s_mc_address[2],s_mc_address[21],s_mc_address[20],	// 7:4
-					s_mc_address[11],s_mc_address[10],s_mc_address[0],s_mc_address[1]	// 3:0
-					};
+wire [31:0] s_mc_address = {8'd0, mc_address};
+
+wire [31:0] da_address = {
+    s_mc_address[31], s_mc_address[30], s_mc_address[12], s_mc_address[13], // 31:28
+    s_mc_address[ 7], s_mc_address[ 6], s_mc_address[15], s_mc_address[14], // 27:24
+    s_mc_address[29], s_mc_address[28], s_mc_address[26], s_mc_address[27], // 23:20
+    s_mc_address[16], s_mc_address[17], s_mc_address[ 5], s_mc_address[ 4], // 19:16
+    s_mc_address[19], s_mc_address[18], s_mc_address[25], s_mc_address[24], // 15:12
+    s_mc_address[ 8], s_mc_address[ 9], s_mc_address[22], s_mc_address[23], // 11:8
+    s_mc_address[ 3], s_mc_address[ 2], s_mc_address[21], s_mc_address[20], // 7:4
+    s_mc_address[11], s_mc_address[10], s_mc_address[ 0], s_mc_address[ 1]  // 3:0
+};
                               
 assign DA_OUT = da_state[0] ? mc_data_write : da_address;
-wire drive_da_OUT = is_bm && da_state[1];
-assign DA_OE = {32{drive_da_OUT}};
+wire drive_da_out = is_bm && da_state[1];
+assign DA_OE = {32{drive_da_out}};
 
 // ## Access request slots.
-// Currently there is only a single request slot,
-// but that could be extended in order to implement request pipelining.
+// There is currently support for two request slots.
 
-reg [31:0]  req_data_write;
-reg [31:0]  req_data_read;
-reg [23:0]  req_address;
-reg [2:0]   req_fc;
-reg [1:0]   req_size; // 0->8b, 1->16b, 3->32b.
-reg         req_rw; // 0->Write, 1->Read.
-reg         req_active;
-reg         req_terminated_normally;
-reg         req_delay_deactivate;
+reg [31:0]  req_data_write [1:0];
+reg [31:0]  req_data_read [1:0];
+reg [23:0]  req_address [1:0];
+reg [2:0]   req_fc [1:0];
+reg [1:0]   req_size [1:0]; // 0->8b, 1->16b, 3->32b.
+reg         req_rw [1:0]; // 0->Write, 1->Read.
+reg [1:0]   req_active;
+reg [1:0]   req_terminated_normally;
+
+reg         current_pi_slot = 1'b0;
+reg         current_execute_slot = 1'b0;
 
 // Bus arbitration.
 reg bg_sync;
@@ -251,7 +247,7 @@ always @(posedge clk) begin
     end
 end
 
-assign PI_TXN_IN_PROGRESS = req_active;
+assign PI_TXN_IN_PROGRESS = req_active[current_pi_slot];
 //assign PI_IPL_ZERO = ipl == 3'd0;
 assign PI_IPL = ~ipl;
 
@@ -262,8 +258,8 @@ reg [1:0]   size;       // 0->8b, 1->16b, 3->32b.
 reg         rw;         // 0->Write, 1->Read.
 reg [31:0]  data_write;
 reg [1:0]   port_width; // 0->8b, 1->16b, 3->32b.
-wire [1:0]  left_shift = address[1:0] & port_width;
-wire [1:0]  transfered = port_width - left_shift;
+reg [1:0]   left_shift;
+reg [1:0]   transfered;
 
 reg [7:0]   data_read_op0;
 reg [7:0]   data_read_op1;
@@ -289,29 +285,24 @@ localparam [2:0] PI_REG_ADDR_LO = 3'd2;
 localparam [2:0] PI_REG_ADDR_HI = 3'd3;
 localparam [2:0] PI_REG_STATUS = 3'd4;
 localparam [2:0] PI_REG_CONTROL = 3'd4;
+localparam [2:0] PI_REG_SLOT = 3'd5;
 
-reg [15:0] pi_data_OUT;
-assign PI_D_OUT = pi_data_OUT;
+reg [15:0] pi_data_out;
+assign PI_D_OUT = pi_data_out;
 
-wire drive_pi_data_OUT = !PI_RD && PI_WR;
-assign PI_D_OE = {16{drive_pi_data_OUT}};
+wire drive_pi_data_out = !PI_RD && PI_WR;
+assign PI_D_OE = {16{drive_pi_data_out}};
 
-wire [15:0] pi_status = {8'd0, req_active, req_terminated_normally, ipl, halt_sync, reset_sync, is_bm};
-
-wire nPI_RD;
-wire nPI_WR;
-
-assign nPI_RD = !PI_RD;
-assign nPI_WR = !PI_WR;
+wire [15:0] pi_status = {8'd0, req_active[current_pi_slot], req_terminated_normally[current_pi_slot], ipl, halt_sync, reset_sync, is_bm};
 
 always @(*) begin
     case (PI_A)
-        PI_REG_DATA_LO: pi_data_OUT <= req_data_read[15:0];
-        PI_REG_DATA_HI: pi_data_OUT <= req_data_read[31:16];
-        PI_REG_ADDR_LO: pi_data_OUT <= address[15:0];
-        PI_REG_ADDR_HI: pi_data_OUT <= {2'd0, req_fc, req_rw, req_size, address[23:16]};
-        PI_REG_STATUS: pi_data_OUT <= pi_status;
-        default: pi_data_OUT <= 16'bx;
+        PI_REG_DATA_LO: pi_data_out <= req_data_read[current_pi_slot][15:0];
+        PI_REG_DATA_HI: pi_data_out <= req_data_read[current_pi_slot][31:16];
+        PI_REG_ADDR_LO: pi_data_out <= address[15:0];
+        PI_REG_ADDR_HI: pi_data_out <= {8'd0, address[23:16]};
+        PI_REG_STATUS: pi_data_out <= pi_status;
+        default: pi_data_out <= 16'bx;
     endcase
 end
 
@@ -360,15 +351,15 @@ always @(posedge clk) begin
 
     if (pi_wr_sync == 2'b10) begin
         case (PI_A)
-            PI_REG_DATA_LO: req_data_write[15:0] <= PI_D_IN;
-            PI_REG_DATA_HI: req_data_write[31:16] <= PI_D_IN;
-            PI_REG_ADDR_LO: req_address[15:0] <= PI_D_IN;
+            PI_REG_DATA_LO: req_data_write[current_pi_slot][15:0] <= PI_D_IN;
+            PI_REG_DATA_HI: req_data_write[current_pi_slot][31:16] <= PI_D_IN;
+            PI_REG_ADDR_LO: req_address[current_pi_slot][15:0] <= PI_D_IN;
             PI_REG_ADDR_HI: begin
-                req_address[23:16] <= PI_D_IN[7:0];
-                req_size <= PI_D_IN[9:8];
-                req_rw <= PI_D_IN[10];
-                req_fc <= PI_D_IN[13:11];
-                req_active <= 1'b1;
+                req_address[current_pi_slot][23:16] <= PI_D_IN[7:0];
+                req_size[current_pi_slot] <= PI_D_IN[9:8];
+                req_rw[current_pi_slot] <= PI_D_IN[10];
+                req_fc[current_pi_slot] <= PI_D_IN[13:11];
+                req_active[current_pi_slot] <= 1'b1;
             end
             PI_REG_CONTROL: begin
                 if (PI_D_IN[15])
@@ -376,25 +367,21 @@ always @(posedge clk) begin
                 else
                     pi_control <= pi_control & ~PI_D_IN[14:0];
             end
+            PI_REG_SLOT: current_pi_slot <= PI_D_IN[0];
         endcase
     end
-
-    if (req_delay_deactivate)
-        req_active <= 1'b0;
-
-    req_delay_deactivate <= 1'b0;
 
     case (state)
         STATE_WAIT_ACTIVE_REQUEST: begin
             if (clk_rising)
                 da_state <= DA_STATE_IDLE;
 
-            if (req_active && !req_delay_deactivate) begin
-                fc <= req_fc;
-                address <= req_address;
-                size <= req_size;
-                rw <= req_rw;
-                data_write <= req_data_write;
+            if (req_active[current_execute_slot]) begin
+                fc <= req_fc[current_execute_slot];
+                address <= req_address[current_execute_slot];
+                size <= req_size[current_execute_slot];
+                rw <= req_rw[current_execute_slot];
+                data_write <= req_data_write[current_execute_slot];
                 state <= STATE_WAIT_BUS_CYCLE_START;
             end
         end
@@ -480,9 +467,8 @@ always @(posedge clk) begin
                     mc_ds <= 1'b1;
             end
 
-			    if (!rw)
-                    da_state <= DA_STATE_FPGA_TO_DATA;
-   
+            if (!rw)
+                da_state <= DA_STATE_FPGA_TO_DATA;
 
             if (clk_falling_plus_1 && any_termination)
                 state <= STATE_WAIT_LATCH_DATA;
@@ -492,7 +478,10 @@ always @(posedge clk) begin
                 mc_as <= 1'b0;
                 mc_ds <= 1'b0;
 
-			    if (!rw)
+                left_shift <= address[1:0] & port_width;
+                transfered <= port_width - (address[1:0] & port_width);
+
+                if (!rw)
                     da_state <= DA_STATE_FPGA_TO_DATA;
 
                 if (rw)
@@ -584,13 +573,15 @@ always @(posedge clk) begin
             state <= STATE_MAYBE_TERMINATE_ACCESS;
         end
         STATE_MAYBE_TERMINATE_ACCESS: begin
-        			if (!rw)
-                    da_state <= DA_STATE_FPGA_TO_DATA;
-                    
+            if (!rw)
+                da_state <= DA_STATE_FPGA_TO_DATA;
+
             if (!terminated_normally || terminated_normally && size <= transfered) begin
-                req_data_read <= data_read;
-                req_terminated_normally <= terminated_normally;
-                req_delay_deactivate <= 1'b1;
+                req_data_read[current_execute_slot] <= data_read;
+                req_terminated_normally[current_execute_slot] <= terminated_normally;
+                req_active[current_execute_slot] <= 1'b0;
+                if (increment_execute_slot_pointer)
+                    current_execute_slot <= current_execute_slot + 1'd1;
                 state <= STATE_WAIT_ACTIVE_REQUEST;
             end else begin
                 // Perform another bus cycle for this access.
