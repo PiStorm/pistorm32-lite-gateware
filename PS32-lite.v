@@ -107,13 +107,13 @@ always @(posedge clk) begin
         phase_counter <= phase_counter + 4'd1;
 end
 
-// These constants must be updated together with the PLL multiplier, currently 12x.
-localparam [3:0] PHASE_CLK_FALLING = 4'd4; // (12/2) - 2
-localparam [3:0] PHASE_CLK_RISING = 4'd10; // 12 - 2
+// These constants must be updated together with the PLL multiplier, currently 14x.
+localparam [3:0] PHASE_CLK_FALLING = 4'd6; // (14/2) - 2
+localparam [3:0] PHASE_CLK_RISING = 4'd12; // 14 - 2
 
-localparam [3:0] PHASE_CLK_FALLING_PLUS_1 = 4'd5;
-localparam [3:0] PHASE_CLK_RISING_PLUS_1 = 4'd11;
-localparam [3:0] PHASE_CLK_RISING_PLUS_3 = 4'd1;
+localparam [3:0] PHASE_CLK_FALLING_PLUS_1 = 4'd7;
+localparam [3:0] PHASE_CLK_RISING_PLUS_1 = 4'd0;
+localparam [3:0] PHASE_CLK_RISING_PLUS_3 = 4'd2;
 
 wire clk_falling = phase_counter == PHASE_CLK_FALLING;
 wire clk_falling_plus_1 = phase_counter == PHASE_CLK_FALLING_PLUS_1;
@@ -343,10 +343,10 @@ end
 always @(*) begin
     // Table 5-1.
     case (mc_dsack_n_sync)
-        2'b11: port_width <= 2'bx; // Unused.
-        2'b10: port_width <= 2'd0;
-        2'b01: port_width <= 2'd1;
-        2'b00: port_width <= 2'd3;
+        2'b11: port_width <= 2'bx;  // Unused.
+        2'b10: port_width <= 2'd0;  // 8 bits
+        2'b01: port_width <= 2'd1;  // 16 bits
+        2'b00: port_width <= 2'd3;  // 32 bits
     endcase
 end
 
@@ -480,19 +480,23 @@ always @(posedge clk) begin
                     mc_ds <= 1'b1;
             end
 
-			    if (!rw)
-                    da_state <= DA_STATE_FPGA_TO_DATA;
+            if (!rw)
+                da_state <= DA_STATE_FPGA_TO_DATA;
    
 
-            if (clk_falling_plus_1 && any_termination)
+            if (clk_falling_plus_1 && any_termination) begin
                 state <= STATE_WAIT_LATCH_DATA;
+                
+                if (!rw && terminated_normally && size <= transfered)
+                    req_delay_deactivate <= 1'b1;
+            end
         end
         STATE_WAIT_LATCH_DATA: begin
             if (clk_falling) begin // S4->S5
                 mc_as <= 1'b0;
                 mc_ds <= 1'b0;
-
-			    if (!rw)
+                
+                if (!rw)
                     da_state <= DA_STATE_FPGA_TO_DATA;
 
                 if (rw)
@@ -584,9 +588,8 @@ always @(posedge clk) begin
             state <= STATE_MAYBE_TERMINATE_ACCESS;
         end
         STATE_MAYBE_TERMINATE_ACCESS: begin
-        			if (!rw)
-                    da_state <= DA_STATE_FPGA_TO_DATA;
-                    
+            if (!rw)
+                da_state <= DA_STATE_FPGA_TO_DATA;
             if (!terminated_normally || terminated_normally && size <= transfered) begin
                 req_data_read <= data_read;
                 req_terminated_normally <= terminated_normally;
