@@ -12,7 +12,18 @@
 # PLL Constraints
 #################
 create_clock -period 5.1020 AMIPLL_CLKOUT0
-create_clock -period 70.5000 MC_CLK
+create_clock -period 71.4286 MC_CLK_CLEAN
+create_clock -period 71.4286 MC_CLK
+
+
+set_false_path -from AMIPLL_CLKOUT0 -to MC_CLK_CLEAN
+set_false_path -from AMIPLL_CLKOUT0 -to MC_CLK
+
+set_false_path -from MC_CLK_CLEAN -to AMIPLL_CLKOUT0
+set_false_path -from MC_CLK_CLEAN -to MC_CLK
+
+set_false_path -from MC_CLK -to AMIPLL_CLKOUT0
+set_false_path -from MC_CLK -to MC_CLK_CLEAN
 
 # GPIO Constraints
 ####################

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<efxpt:design_db name="PS32-lite" device_def="T8Q144" location="H:\pistorm32-lite-gateware-org" version="2022.1.226" db_version="20221999" last_change_date="Sat Jan  7 09:11:59 2023" xmlns:efxpt="http://www.efinixinc.com/peri_design_db" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.efinixinc.com/peri_design_db peri_design_db.xsd ">
+<efxpt:design_db name="PS32-lite" device_def="T8Q144" location="E:\Amiga\pistorm32-lite-gateware-2-slot" version="2022.2.322" db_version="20222999" last_change_date="Mon May  8 19:50:29 2023" xmlns:efxpt="http://www.efinixinc.com/peri_design_db" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.efinixinc.com/peri_design_db peri_design_db.xsd ">
     <efxpt:device_info>
         <efxpt:iobank_info>
             <efxpt:iobank name="1A" iostd="3.3 V LVTTL / LVCMOS"/>
@@ -20,7 +20,7 @@
             <efxpt:ctrl name="cfg" ctrl_def="CONFIG_CTRL0" clock_name="" is_clk_invert="false" cbsel_bus_name="cfg_CBSEL" config_ctrl_name="cfg_CONFIG" ena_capture_name="cfg_ENA" error_status_name="cfg_ERROR" um_signal_status_name="cfg_USR_STATUS" is_remote_update_enable="false" is_user_mode_enable="false"/>
         </efxpt:ctrl_info>
     </efxpt:device_info>
-    <efxpt:gpio_info device_def="T20Q144">
+    <efxpt:gpio_info device_def="T8Q144">
         <efxpt:gpio name="ADDR_LE" gpio_def="GPIOR_129" mode="output" bus_name="" is_lvds_gpio="false" io_standard="3.3 V LVTTL / LVCMOS">
             <efxpt:output_config name="ADDR_LE" name_ddio_lo="" register_option="none" clock_name="" is_clock_inverted="false" is_slew_rate="false" tied_option="none" ddio_type="none" drive_strength="4"/>
         </efxpt:gpio>
@@ -453,9 +453,13 @@
         <efxpt:bus name="PI_IPL" mode="output" msb="2" lsb="0"/>
     </efxpt:gpio_info>
     <efxpt:pll_info>
-        <efxpt:pll name="AMIPLL" pll_def="PLL_TR0" ref_clock_name="" ref_clock_freq="14.0000" multiplier="14" pre_divider="1" post_divider="8" reset_name="" locked_name="" is_ipfrz="false" is_bypass_lock="true">
-            <efxpt:output_clock name="AMIPLL_CLKOUT0" number="0" out_divider="1" adv_out_phase_shift="0"/>
-            <efxpt:adv_prop ref_clock_mode="external" ref_clock1_name="" ext_ref_clock_id="2" clksel_name="" feedback_clock_name="AMIPLL_CLKOUT0" feedback_mode="core"/>
+        <efxpt:pll name="AMIPLL" pll_def="PLL_TR0" ref_clock_name="MC_CLK_CLEAN" ref_clock_freq="14.0000" multiplier="14" pre_divider="1" post_divider="4" reset_name="" locked_name="" is_ipfrz="false" is_bypass_lock="true">
+            <efxpt:output_clock name="AMIPLL_CLKOUT0" number="0" out_divider="4" adv_out_phase_shift="0"/>
+            <efxpt:adv_prop ref_clock_mode="core" ref_clock1_name="" ext_ref_clock_id="2" clksel_name="" feedback_clock_name="AMIPLL_CLKOUT0" feedback_mode="core"/>
+        </efxpt:pll>
+        <efxpt:pll name="ClockCleanerPLL" pll_def="PLL_TR1" ref_clock_name="" ref_clock_freq="14.0000" multiplier="1" pre_divider="1" post_divider="4" reset_name="" locked_name="" is_ipfrz="false" is_bypass_lock="true">
+            <efxpt:output_clock name="MC_CLK_CLEAN" number="0" out_divider="63" adv_out_phase_shift="0"/>
+            <efxpt:adv_prop ref_clock_mode="external" ref_clock1_name="" ext_ref_clock_id="2" clksel_name="" feedback_clock_name="MC_CLK_CLEAN" feedback_mode="core"/>
         </efxpt:pll>
     </efxpt:pll_info>
     <efxpt:lvds_info/>

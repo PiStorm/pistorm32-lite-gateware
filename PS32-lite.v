@@ -69,7 +69,8 @@ module pistorm(
     output [7:0]   SPARE_OE,
     
     //PLL
-    input AMIPLL_CLKOUT0
+    input AMIPLL_CLKOUT0,
+    input MC_CLK_CLEAN
 );
 
 assign SPARE_OUT[7:2] = 6'b111111;
@@ -86,35 +87,39 @@ wire clk;
 // Connect the PLL.
 assign clk = AMIPLL_CLKOUT0;
 
-// Synchronize clk_rising/clk_falling with MC_CLK.
-(* async_reg = "true" *) reg [1:0] mc_clk_sync;
-
-always @(negedge clk) begin
-    mc_clk_sync <= {mc_clk_sync[0], MC_CLK};
+//Dummy Reg for prevent MC_CLK_CLEAN to be optimized
+(* syn_preserve = "true" *) reg dummy_mc_clk;
+always @(posedge MC_CLK_CLEAN) begin
+dummy_mc_clk <= ~dummy_mc_clk;
 end
 
+// Synchronize clk_rising/clk_falling with MC_CLK.
+(* async_reg = "true" *) reg [3:0] mc_clk_sync;
 reg [3:0] phase_counter;
+reg clk_falling, clk_falling_plus_1,clk_rising,clk_rising_plus_1,clk_rising_plus_3;
+
+localparam PLL_MULTI = 14;
+localparam PHASE_OFFSET = 0; //12 to 3 works on my Amiga
 
 always @(posedge clk) begin
-    if (mc_clk_sync == 2'b01)
-        phase_counter <= 4'd0;
-    else
-        phase_counter <= phase_counter + 4'd1;
+
+ mc_clk_sync <= {mc_clk_sync[2:0], MC_CLK_CLEAN};
+
+ if (mc_clk_sync == 4'b1110)
+       phase_counter <= PHASE_OFFSET;
+ else begin       
+     if  (phase_counter >= PLL_MULTI-1)
+           phase_counter <= 0; 
+     else         
+        phase_counter <= phase_counter + 1;
+ end
+    
+ clk_falling <= phase_counter         == 0;
+ clk_falling_plus_1 <= phase_counter  == 1;
+ clk_rising <= phase_counter          == (PLL_MULTI/2);
+ clk_rising_plus_1 <= phase_counter   == (PLL_MULTI/2)+1;
+ clk_rising_plus_3 <= phase_counter   == (PLL_MULTI/2)+3;
 end
-
-// These constants must be updated together with the PLL multiplier, currently 12x.
-localparam [3:0] PHASE_CLK_FALLING = 4'd4; // (12/2) - 2
-localparam [3:0] PHASE_CLK_RISING = 4'd10; // 12 - 2
-
-localparam [3:0] PHASE_CLK_FALLING_PLUS_1 = 4'd5;
-localparam [3:0] PHASE_CLK_RISING_PLUS_1 = 4'd11;
-localparam [3:0] PHASE_CLK_RISING_PLUS_3 = 4'd1;
-
-wire clk_falling = phase_counter == PHASE_CLK_FALLING;
-wire clk_falling_plus_1 = phase_counter == PHASE_CLK_FALLING_PLUS_1;
-wire clk_rising = phase_counter == PHASE_CLK_RISING;
-wire clk_rising_plus_1 = phase_counter == PHASE_CLK_RISING_PLUS_1;
-wire clk_rising_plus_3 = phase_counter == PHASE_CLK_RISING_PLUS_3;
 
 // Pi control register.
 reg [14:0] pi_control = 15'b000000;
@@ -471,6 +476,7 @@ always @(posedge clk) begin
                 da_state <= DA_STATE_FPGA_TO_DATA;
 
             if (clk_falling_plus_1 && any_termination)
+            //if (any_termination)
                 state <= STATE_WAIT_LATCH_DATA;
         end
         STATE_WAIT_LATCH_DATA: begin
