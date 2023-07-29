@@ -69,8 +69,8 @@ module pistorm(
     output [7:0]   SPARE_OE,
     
     //PLL
-    input AMIPLL_CLKOUT0,
-    input MC_CLK_CLEAN
+    input AMIPLL_CLKOUT0
+    //input MC_CLK_CLEAN
 );
 
 assign SPARE_OUT[7:2] = 6'b111111;
@@ -87,38 +87,33 @@ wire clk;
 // Connect the PLL.
 assign clk = AMIPLL_CLKOUT0;
 
-//Dummy Reg for prevent MC_CLK_CLEAN to be optimized
-(* syn_preserve = "true" *) reg dummy_mc_clk;
-always @(posedge MC_CLK_CLEAN) begin
-dummy_mc_clk <= ~dummy_mc_clk;
-end
-
 // Synchronize clk_rising/clk_falling with MC_CLK.
-(* async_reg = "true" *) reg [3:0] mc_clk_sync;
-reg [3:0] phase_counter;
-reg clk_falling, clk_falling_plus_1,clk_rising,clk_rising_plus_1,clk_rising_plus_3;
-
-localparam PLL_MULTI = 14;
-localparam PHASE_OFFSET = 0; //12 to 3 works on my Amiga
+(* async_reg = "true" *) reg [1:0] mc_clk_sync;
+reg clk_falling, clk_falling_plus_1,clk_falling_plus_2,clk_falling_plus_3,clk_rising,clk_rising_plus_1,clk_rising_plus_2,clk_rising_plus_3;
 
 always @(posedge clk) begin
+    mc_clk_sync <= {mc_clk_sync[0], MC_CLK};
+end
 
- mc_clk_sync <= {mc_clk_sync[2:0], MC_CLK_CLEAN};
-
- if (mc_clk_sync == 4'b1110)
-       phase_counter <= PHASE_OFFSET;
- else begin       
-     if  (phase_counter >= PLL_MULTI-1)
-           phase_counter <= 0; 
-     else         
-        phase_counter <= phase_counter + 1;
- end
+always @(posedge clk) begin
+    if ({mc_clk_sync[1], mc_clk_sync[0]} == 2'b01)
+        clk_rising <= 1'b1;
+    else
+        clk_rising <= 1'b0;
     
- clk_falling <= phase_counter         == 0;
- clk_falling_plus_1 <= phase_counter  == 1;
- clk_rising <= phase_counter          == (PLL_MULTI/2);
- clk_rising_plus_1 <= phase_counter   == (PLL_MULTI/2)+1;
- clk_rising_plus_3 <= phase_counter   == (PLL_MULTI/2)+3;
+   if ({mc_clk_sync[1], mc_clk_sync[0]} == 2'b10)
+        clk_falling <= 1'b1;
+    else
+        clk_falling <= 1'b0;   
+        
+ clk_falling_plus_1 <= clk_falling;
+ clk_falling_plus_2 <= clk_falling_plus_1;
+ clk_falling_plus_3 <= clk_falling_plus_2;
+   
+ clk_rising_plus_1 <= clk_rising;
+ clk_rising_plus_2 <= clk_rising_plus_1;
+ clk_rising_plus_3 <= clk_rising_plus_2;
+ 
 end
 
 // Pi control register.
@@ -153,7 +148,6 @@ reg [1:0]   mc_size;
 reg         mc_rw;
 reg [31:0]  mc_data_read;
 reg [31:0]  mc_data_write;
-reg         mc_drive_data;
 reg         mc_as;
 reg         mc_ds;
 
