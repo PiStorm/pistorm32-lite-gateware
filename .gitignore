@@ -7,3 +7,9 @@ work_syn/
 *.vdb
 *.log
 *TEMPLATE*.*
+work_dbg/run_efinity_auto_dbg.sh
+work_dbg/debug_top.v
+view.gtkw
+*.vcd
+*.1
+*.json

@@ -158,9 +158,11 @@ reg [2:0]   sync_mc_fc;
 reg [1:0]   sync_mc_size;
 reg         sync_mc_rw;
 
+reg [1:0] sync_mc_dsack_n_sync;
 always @(negedge MC_CLK) begin
  sync_mc_as <= mc_as;
  sync_mc_ds <= mc_ds;
+ sync_mc_dsack_n_sync <= MC_DSACK_n;
 end
 
 always @(posedge MC_CLK) begin
@@ -312,10 +314,15 @@ assign PI_D_OE = {16{drive_pi_data_out}};
 
 wire [15:0] pi_status = {8'd0, req_active[current_pi_slot], req_terminated_normally[current_pi_slot], ipl, halt_sync, reset_sync, is_bm};
 
+reg [31:0] q_req_data_read;
+always @(posedge clk) begin
+q_req_data_read <= req_data_read[current_pi_slot];
+end
+
 always @(*) begin
     case (PI_A)
-        PI_REG_DATA_LO: pi_data_out <= req_data_read[current_pi_slot][15:0];
-        PI_REG_DATA_HI: pi_data_out <= req_data_read[current_pi_slot][31:16];
+        PI_REG_DATA_LO: pi_data_out <= q_req_data_read[15:0];//req_data_read[current_pi_slot][15:0];
+        PI_REG_DATA_HI: pi_data_out <= q_req_data_read[31:16];//req_data_read[current_pi_slot][31:16];
         PI_REG_ADDR_LO: pi_data_out <= address[15:0];
         PI_REG_ADDR_HI: pi_data_out <= {8'd0, address[23:16]};
         PI_REG_STATUS: pi_data_out <= pi_status;
@@ -340,9 +347,10 @@ reg mc_berr_n_sync;
 reg mc_reset_n_sync;
 
 always @(posedge clk) begin
+        mc_dsack_n_sync <= sync_mc_dsack_n_sync;
     if (clk_falling) begin
         mc_data_read <= DA_IN;
-        mc_dsack_n_sync <= MC_DSACK_n;
+        //mc_dsack_n_sync <= MC_DSACK_n;
         mc_berr_n_sync <= MC_BERR_n;
         mc_reset_n_sync <= MC_RESET_n_IN;
     end
@@ -362,29 +370,31 @@ wire any_termination = |(~{mc_dsack_n_sync, mc_berr_n_sync, mc_reset_n_sync});
 wire terminated_normally = mc_berr_n_sync && mc_reset_n_sync;
 
 (* async_reg = "true" *) reg [1:0] pi_wr_sync;
+reg [15:0] q_PI_D_IN;
 
 always @(posedge clk) begin
     pi_wr_sync <= {pi_wr_sync[0], PI_WR};
-
+    q_PI_D_IN <= PI_D_IN;
+    
     if (pi_wr_sync == 2'b10) begin
         case (PI_A)
-            PI_REG_DATA_LO: req_data_write[current_pi_slot][15:0] <= PI_D_IN;
-            PI_REG_DATA_HI: req_data_write[current_pi_slot][31:16] <= PI_D_IN;
-            PI_REG_ADDR_LO: req_address[current_pi_slot][15:0] <= PI_D_IN;
+            PI_REG_DATA_LO: req_data_write[current_pi_slot][15:0] <= q_PI_D_IN;
+            PI_REG_DATA_HI: req_data_write[current_pi_slot][31:16] <= q_PI_D_IN;
+            PI_REG_ADDR_LO: req_address[current_pi_slot][15:0] <= q_PI_D_IN;
             PI_REG_ADDR_HI: begin
-                req_address[current_pi_slot][23:16] <= PI_D_IN[7:0];
-                req_size[current_pi_slot] <= PI_D_IN[9:8];
-                req_rw[current_pi_slot] <= PI_D_IN[10];
-                req_fc[current_pi_slot] <= PI_D_IN[13:11];
+                req_address[current_pi_slot][23:16] <= q_PI_D_IN[7:0];
+                req_size[current_pi_slot] <= q_PI_D_IN[9:8];
+                req_rw[current_pi_slot] <= q_PI_D_IN[10];
+                req_fc[current_pi_slot] <= q_PI_D_IN[13:11];
                 req_active[current_pi_slot] <= 1'b1;
             end
             PI_REG_CONTROL: begin
                 if (PI_D_IN[15])
-                    pi_control <= pi_control | PI_D_IN[14:0];
+                    pi_control <= pi_control | q_PI_D_IN[14:0];
                 else
-                    pi_control <= pi_control & ~PI_D_IN[14:0];
+                    pi_control <= pi_control & ~q_PI_D_IN[14:0];
             end
-            PI_REG_SLOT: current_pi_slot <= PI_D_IN[0];
+            PI_REG_SLOT: current_pi_slot <= q_PI_D_IN[0];
         endcase
     end
 
@@ -487,8 +497,8 @@ always @(posedge clk) begin
             if (!rw)
                 da_state <= DA_STATE_FPGA_TO_DATA;
 
-            if (clk_falling_plus_1 && any_termination)
-            //if (any_termination)
+            //if (clk_falling_plus_1 && any_termination)
+            if (any_termination)
                 state <= STATE_WAIT_LATCH_DATA;
         end
         STATE_WAIT_LATCH_DATA: begin
@@ -587,7 +597,6 @@ always @(posedge clk) begin
                         2'd3: data_read_op0 <= op3_rd;
                     endcase
             endcase
-
             state <= STATE_MAYBE_TERMINATE_ACCESS;
         end
         STATE_MAYBE_TERMINATE_ACCESS: begin
