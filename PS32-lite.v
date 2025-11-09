@@ -69,6 +69,7 @@ module pistorm(
     output [7:0]   SPARE_OE,
     
     //PLL
+    //output MC_CLK_TO_PLL,
     input AMIPLL_CLKOUT0
     //input AMIPLL_LOCK
     //input MC_CLK_CLEAN
@@ -88,34 +89,6 @@ wire clk;
 // Connect the PLL.
 assign clk = AMIPLL_CLKOUT0;
 
-// Synchronize clk_rising/clk_falling with MC_CLK.
-(* async_reg = "true" *) reg [12:0] mc_clk_sync;
-reg clk_falling, clk_falling_plus_1,clk_falling_plus_2,clk_falling_plus_3,clk_rising,clk_rising_plus_1,clk_rising_plus_2,clk_rising_plus_3;
-
-always @(posedge clk) begin
-    mc_clk_sync <= {mc_clk_sync[11:0], MC_CLK};
-end
-
-always @(posedge clk) begin
-    if ({mc_clk_sync[10], mc_clk_sync[9]} == 2'b01)
-        clk_rising <= 1'b1;
-    else
-        clk_rising <= 1'b0;
-    
-   if ({mc_clk_sync[10], mc_clk_sync[9]} == 2'b10)
-        clk_falling <= 1'b1;
-    else
-        clk_falling <= 1'b0;   
-        
- clk_falling_plus_1 <= clk_falling;
- clk_falling_plus_2 <= clk_falling_plus_1;
- clk_falling_plus_3 <= clk_falling_plus_2;
-   
- clk_rising_plus_1 <= clk_rising;
- clk_rising_plus_2 <= clk_rising_plus_1;
- clk_rising_plus_3 <= clk_rising_plus_2;
- 
-end
 
 // Pi control register.
 reg [14:0] pi_control = 15'b000000000000110;
@@ -152,34 +125,30 @@ reg [31:0]  mc_data_write;
 reg         mc_as;
 reg         mc_ds;
 
-reg         sync_mc_as;
-reg         sync_mc_ds;
-reg [2:0]   sync_mc_fc;
-reg [1:0]   sync_mc_size;
-reg         sync_mc_rw;
 
-reg [1:0] sync_mc_dsack_n_sync;
-always @(negedge MC_CLK) begin
- sync_mc_as <= mc_as;
- sync_mc_ds <= mc_ds;
- sync_mc_dsack_n_sync <= MC_DSACK_n;
-end
+reg sync_clk;
+reg rising;
+reg falling;
+reg sync_mc_as;
+reg [12:0] mc_clk_sync = 12'd0;
+always @(posedge clk) begin
+    sync_clk <= MC_CLK;
+    mc_clk_sync <= {mc_clk_sync[11:0], MC_CLK};
+    sync_mc_as <= mc_as;
+    if  ( !mc_clk_sync[1] && mc_clk_sync[0]) rising <=1; else rising <= 0;         
+    if  ( mc_clk_sync[1] && !mc_clk_sync[0]) falling <= 1; else falling <= 0;   
+end 
 
-always @(posedge MC_CLK) begin
- sync_mc_fc <= mc_fc;
- sync_mc_size <= mc_size;
- sync_mc_rw <= mc_rw;
-end
 
-assign MC_FC_OUT = sync_mc_fc;
+assign MC_FC_OUT = mc_fc;
 assign MC_FC_OE = {3{is_bm}};
-assign MC_SIZE_OUT = sync_mc_size;
+assign MC_SIZE_OUT = mc_size;
 assign MC_SIZE_OE = {2{is_bm}};
-assign MC_RW_OUT = sync_mc_rw;
+assign MC_RW_OUT = mc_rw;
 assign MC_RW_OE = is_bm;
-assign MC_AS_n_OUT = !sync_mc_as;
+assign MC_AS_n_OUT = !mc_as; //Claude
 assign MC_AS_n_OE = is_bm;
-assign MC_DS_n_OUT = !sync_mc_ds;
+assign MC_DS_n_OUT = !mc_ds; //Claude
 assign MC_DS_n_OE = is_bm;
 
 // Shared bus control.
@@ -247,7 +216,7 @@ end
 
 // Sample RESET, HALT.
 always @(posedge clk) begin
-    if (clk_falling) begin
+    if (falling) begin
         reset_sync <= !MC_RESET_n_IN;
         halt_sync <= !MC_HALT_n_IN;
     end
@@ -257,7 +226,7 @@ end
 (* async_reg = "true" *) reg [2:0] ipl_sync [1:0];
 
 always @(posedge clk) begin
-    if (clk_falling) begin
+    if (falling) begin
         ipl_sync[0] <= ~MC_IPL_n;
         ipl_sync[1] <= ipl_sync[0];
 
@@ -331,29 +300,32 @@ always @(*) begin
 end
 
 // ## Access state machine.
-localparam [2:0] STATE_WAIT_ACTIVE_REQUEST = 3'd0;
-localparam [2:0] STATE_WAIT_BUS_CYCLE_START = 3'd1;
-localparam [2:0] STATE_WAIT_ASSERT_AS = 3'd2;
-localparam [2:0] STATE_WAIT_OPEN_DATA_LATCH = 3'd3;
-localparam [2:0] STATE_WAIT_TERMINATION = 3'd4;
-localparam [2:0] STATE_WAIT_LATCH_DATA = 3'd5;
-localparam [2:0] STATE_UPDATE_DATA_READ = 3'd6;
-localparam [2:0] STATE_MAYBE_TERMINATE_ACCESS = 3'd7;
+localparam [3:0] STATE_WAIT_ACTIVE_REQUEST = 4'd0;
+localparam [3:0] STATE_WAIT_BUS_CYCLE_START = 4'd1;
+localparam [3:0] STATE_WAIT_ASSERT_AS = 4'd2;
+localparam [3:0] STATE_WAIT_OPEN_DATA_LATCH = 4'd3;
+localparam [3:0] STATE_WAIT_TERMINATION = 4'd4;
+localparam [3:0] STATE_S4_NOP = 4'd5;
+localparam [3:0] STATE_WAIT_LATCH_DATA = 4'd6;
+localparam [3:0] STATE_UPDATE_DATA_READ = 4'd7;
+localparam [3:0] STATE_MAYBE_TERMINATE_ACCESS = 4'd8;
 
-reg [2:0] state;
+reg [3:0] state = 4'd0;
 
 (* async_reg = "true" *) reg [1:0] mc_dsack_n_sync;
 reg mc_berr_n_sync;
 reg mc_reset_n_sync;
+reg [1:0] sync_mc_dsack_n_sync;
 
 always @(posedge clk) begin
-        mc_dsack_n_sync <= sync_mc_dsack_n_sync;
-    if (clk_falling) begin
+        
+    if (falling) begin
         mc_data_read <= DA_IN;
-        //mc_dsack_n_sync <= MC_DSACK_n;
+        mc_dsack_n_sync <= MC_DSACK_n;
         mc_berr_n_sync <= MC_BERR_n;
         mc_reset_n_sync <= MC_RESET_n_IN;
     end
+    
 end
 
 always @(*) begin
@@ -400,7 +372,7 @@ always @(posedge clk) begin
 
     case (state)
         STATE_WAIT_ACTIVE_REQUEST: begin
-            if (clk_rising)
+            if (rising)
                 da_state <= DA_STATE_IDLE;
 
             if (req_active[current_execute_slot]) begin
@@ -413,9 +385,9 @@ always @(posedge clk) begin
             end
         end
         STATE_WAIT_BUS_CYCLE_START: begin
-            if (clk_rising) begin // Entering S0
+            if (rising) begin // Entering S0
                 da_state <= DA_STATE_IDLE;
-
+                
                 mc_fc <= fc;
                 mc_address <= address;
                 mc_rw <= rw;
@@ -460,26 +432,22 @@ always @(posedge clk) begin
                 state <= STATE_WAIT_ASSERT_AS;
             end
         end
+        
         STATE_WAIT_ASSERT_AS: begin
-            if (clk_rising_plus_1) begin
-                da_state <= DA_STATE_FPGA_TO_ADDR;
-                address_latch_le <= 1'b1;
-            end
+        da_state <= DA_STATE_FPGA_TO_ADDR;
+        address_latch_le <= 1'b1;
 
-            if (clk_rising_plus_3)
+            if (falling) begin // S0->S1
                 address_latch_le <= 1'b0;
-
-            if (clk_falling) begin // S0->S1
                 mc_as <= 1'b1;
                 if (rw)
-                    mc_ds <= 1'b1;
-
-                da_state <= DA_STATE_IDLE;
+                    mc_ds <= 1'b1;                   
                 state <= STATE_WAIT_OPEN_DATA_LATCH;
             end
         end
+        
         STATE_WAIT_OPEN_DATA_LATCH: begin
-            if (clk_rising) begin // S1->S2
+            if (rising) begin // S1->S2
                 if (rw)
                     da_state <= DA_STATE_DATA_TO_FPGA;
                 else
@@ -488,29 +456,29 @@ always @(posedge clk) begin
                 state <= STATE_WAIT_TERMINATION;
             end
         end
+        
         STATE_WAIT_TERMINATION: begin
-            if (clk_falling) begin // S2->S3
+            if (falling) begin // S2->S3
                 if (!rw)
                     mc_ds <= 1'b1;
             end
-
-            if (!rw)
-                da_state <= DA_STATE_FPGA_TO_DATA;
-
-            //if (clk_falling_plus_1 && any_termination)
             if (any_termination)
-                state <= STATE_WAIT_LATCH_DATA;
+                state <= STATE_S4_NOP;
         end
+         
+        STATE_S4_NOP: begin
+            if (falling) begin
+                state <= STATE_WAIT_LATCH_DATA;
+            end
+        end
+        
         STATE_WAIT_LATCH_DATA: begin
-            if (clk_falling) begin // S4->S5
+            if (falling) begin // S4->S5
                 mc_as <= 1'b0;
                 mc_ds <= 1'b0;
 
                 left_shift <= address[1:0] & port_width;
                 transfered <= port_width - (address[1:0] & port_width);
-
-                if (!rw)
-                    da_state <= DA_STATE_FPGA_TO_DATA;
 
                 if (rw)
                   state <= STATE_UPDATE_DATA_READ;
@@ -518,6 +486,7 @@ always @(posedge clk) begin
                   state <= STATE_MAYBE_TERMINATE_ACCESS;
             end
         end
+        
         STATE_UPDATE_DATA_READ: begin
             // Table 5-4.
             case (size)
@@ -599,17 +568,15 @@ always @(posedge clk) begin
             endcase
             state <= STATE_MAYBE_TERMINATE_ACCESS;
         end
-        STATE_MAYBE_TERMINATE_ACCESS: begin
-            if (!rw)
-                da_state <= DA_STATE_FPGA_TO_DATA;
-
+        
+        STATE_MAYBE_TERMINATE_ACCESS: begin      
             if (!terminated_normally || terminated_normally && size <= transfered) begin
                 req_data_read[current_execute_slot] <= data_read;
                 req_terminated_normally[current_execute_slot] <= terminated_normally;
                 req_active[current_execute_slot] <= 1'b0;
                 if (increment_execute_slot_pointer)
                     current_execute_slot <= current_execute_slot + 1'd1;
-                state <= STATE_WAIT_ACTIVE_REQUEST;
+                    state <= STATE_WAIT_ACTIVE_REQUEST;
             end else begin
                 // Perform another bus cycle for this access.
                 address <= address + {22'd0, transfered + 2'd1};
