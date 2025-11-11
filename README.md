@@ -11,15 +11,14 @@ Also Linux Pistorm and EMU68 will automatically bundle the latest stable release
 
 ## Developing FPGA Firmware
 
-To build the project a Efinix Efinity toolchain is needed.
-The toolchain is not freely downloadable. To gain access to the download area a valid key file is needed.
-The cheapest way to get hold of a key file is by purchasing a Efinix Xyloni Evaluation Kit.
-
+To build the project you need the Efinix Efinity toolchain, which Efinix now provides free of charge.
 You only need the Efinity toolchain if you intend to develop for the PiStorm32-lite FPGA.
 
-[Link to Efinix](https://www.efinixinc.com/)
+Steps to obtain the tools and license:
 
-[Purchase link to the Xyloni Evaluation Kit](https://www.digikey.de/short/j9dqp75h)
+- Register for a free account on the Efinix Support portal and log in: [Efinix Support](https://www.efinixinc.com/support/).
+- Once registered, open the Efinity software page to download the installer; the same portal provides the free license request after you log in.
+- Install Efinity using the files supplied through your support account.
 
 For JTAG (if needed) a standard FT232H/FT2232H dongle is sufficient. Refer to the Efinity Documentation on how to use these dongles in the toolchain.
 
