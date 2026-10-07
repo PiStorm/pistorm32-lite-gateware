@@ -117,8 +117,8 @@ module pi_interface (
     //   Bit 3: drive_int2                     - Assert Amiga INT2 (Paula, Audio/Ports)
     //   Bit 4: drive_int6                     - Assert Amiga INT6 (CIA-B, Timer)
     //   Bit 5: increment_execute_slot_pointer - Ping-pong request slots automatically
-    //   Bit 6: enable_prefetch                - Enable speculative 32-bit read prefetch
-    reg [14:0] pi_control = 15'b000000000000110;
+    //   Bit 6: enable_prefetch                - Enable speculative 32-bit read prefetch (default: 1 = enabled)
+    reg [14:0] pi_control = 15'b000000001000110;
     assign request_bm                     = pi_control[0];
     assign drive_reset                    = pi_control[1];
     assign drive_halt                     = pi_control[2];

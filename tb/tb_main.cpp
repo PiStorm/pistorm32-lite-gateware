@@ -1168,6 +1168,7 @@ int main(int argc, char** argv) {
     // =========================================================================
     std::cout << "\n" ANSI_BOLD "=== Test 7: Bus Error (BERR) Injection & Status Handling ===" ANSI_RESET << std::endl;
     {
+        harness.run_mc_cycles(15);
         amiga->set_inject_berr_once(true);
         uint32_t berr_addr = 0x08005000;
 
