@@ -4,7 +4,7 @@ Efinix Trion T20 FPGA gateware for the PiStorm32-lite card (Commodore Amiga 1200
 
 ## Overview
 
-PiStorm32-lite connects a Raspberry Pi (running EMU68 or Linux) to the Amiga 1200's 150-pin CPU expansion edge connector. The Pi acts as the CPU and Fast RAM, while the FPGA bridges host parallel GPIO requests into 68EC020 bus cycles for Chip RAM and custom chipset registers.
+PiStorm32-lite connects a Raspberry Pi (running EMU68) to the Amiga 1200's 150-pin CPU expansion edge connector. The Pi acts as the CPU and Fast RAM, while the FPGA bridges host parallel GPIO requests into 68EC020 bus cycles for Chip RAM and custom chipset registers.
 
 The gateware is split into three main modules:
 - `m68k_interface.v`: MC68020 bus master state machine, dynamic bus sizing (DSACK), and clock deglitch filter.
@@ -67,7 +67,6 @@ make bitstream
 
 The ready-to-use bitstream is pre-compiled and tracked in the repository as [`firmware.bin.gz`](firmware.bin.gz).
 
-### With Emu68 (Bare-Metal JIT)
 The Emu68 kernel always has the latest stable firmware bitstream compiled directly into the kernel. If you want to load or test a custom bitstream from file:
 
 1. Copy [`firmware.bin.gz`](firmware.bin.gz) onto the FAT32 boot partition of your Raspberry Pi SD card (in the root directory).
@@ -81,19 +80,10 @@ The Emu68 kernel always has the latest stable firmware bitstream compiled direct
    ```
 3. Power on or reset the Amiga. Emu68 will automatically load and program the FPGA bitstream from this file at boot.
 
-### With PiStorm Linux
-Flashing under Linux is completely automatic at boot:
-
-1. Copy [`firmware.bin.gz`](firmware.bin.gz) into the PiStorm directory on your Raspberry Pi:
-   ```bash
-   sudo cp firmware.bin.gz /usr/share/pistorm/
-   ```
-2. The PiStorm system automatically programs the FPGA at boot. (Alternatively, you can flash immediately using `sudo ./flash.sh firmware.bin.gz`).
-
 <details>
 <summary><b>FPGA Programming GPIO Pinout (Hardware Details)</b></summary>
 
-Emu68 and PiStorm Linux program the FPGA over a high-speed parallel/SPI bitbang interface using Raspberry Pi GPIOs:
+Emu68 programs the FPGA over a high-speed parallel/SPI bitbang interface using Raspberry Pi GPIOs:
 
 | Signal | Raspberry Pi BCM GPIO | Description |
 | :--- | :---: | :--- |
