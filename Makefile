@@ -1,6 +1,6 @@
 VERILATOR ?= verilator
 VERILATOR_FLAGS = -Wall -Wno-fatal -Wno-DECLFILENAME -Wno-WIDTH -Wno-UNUSED -Wno-CASEINCOMPLETE -Wno-COMBDLY
-VERILATOR_FLAGS += --cc PS32-lite.v --top-module pistorm --trace
+VERILATOR_FLAGS += -y . --cc PS32-lite.v pi_interface.v zorro_device.v m68k_interface.v --top-module pistorm --trace
 VERILATOR_FLAGS += --Mdir obj_dir
 VERILATOR_FLAGS += -CFLAGS "-std=c++17 -O2 -I../tb"
 VERILATOR_FLAGS += --exe ../tb/tb_main.cpp ../tb/ps_pi_model.cpp ../tb/amiga_bus_model.cpp ../tb/m68k_timing_checker.cpp ../tb/pcb_components.cpp -o ../tb_pistorm32

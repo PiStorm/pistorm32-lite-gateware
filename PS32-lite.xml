@@ -6,6 +6,9 @@
     </efx:device_info>
     <efx:design_info def_veri_version="verilog_2k" def_vhdl_version="vhdl_2008" unified_flow="false">
         <efx:top_module name="pistorm" />
+        <efx:design_file name="pi_interface.v" version="default" library="default" />
+        <efx:design_file name="zorro_device.v" version="default" library="default" />
+        <efx:design_file name="m68k_interface.v" version="default" library="default" />
         <efx:design_file name="PS32-lite.v" version="default" library="default" />
         <efx:top_vhdl_arch name="" />
     </efx:design_info>

@@ -864,31 +864,31 @@ int main(int argc, char** argv) {
         // Unaligned 32-bit read in Chip-RAM must NOT trigger prefetch
         pi->ps32_read_32(0x005001);
         harness.run_mc_cycles(4);
-        TEST_ASSERT(dut->pistorm__DOT__prefetch_eligible == 0,
+        TEST_ASSERT(dut->pistorm__DOT__u_m68k__DOT__prefetch_eligible == 0,
                     "Prefetch Safety: Unaligned 32-bit read (offset 1) does NOT make prefetch eligible");
 
         // Byte read must NOT trigger prefetch
         pi->ps32_read_8(0x005002);
         harness.run_mc_cycles(4);
-        TEST_ASSERT(dut->pistorm__DOT__prefetch_eligible == 0,
+        TEST_ASSERT(dut->pistorm__DOT__u_m68k__DOT__prefetch_eligible == 0,
                     "Prefetch Safety: Byte read (offset 2) does NOT make prefetch eligible");
 
         // Word read must NOT trigger prefetch
         pi->ps32_read_16(0x005002);
         harness.run_mc_cycles(4);
-        TEST_ASSERT(dut->pistorm__DOT__prefetch_eligible == 0,
+        TEST_ASSERT(dut->pistorm__DOT__u_m68k__DOT__prefetch_eligible == 0,
                     "Prefetch Safety: Word read (offset 2) does NOT make prefetch eligible");
 
         // 16-bit port read must NOT trigger prefetch
         pi->ps32_read_32(base_16 + 0x00);
         harness.run_mc_cycles(4);
-        TEST_ASSERT(dut->pistorm__DOT__prefetch_eligible == 0,
+        TEST_ASSERT(dut->pistorm__DOT__u_m68k__DOT__prefetch_eligible == 0,
                     "Prefetch Safety: 16-bit port read does NOT make prefetch eligible");
 
         // Aligned 32-bit read on 32-bit port MUST trigger prefetch
         pi->ps32_read_32(0x005000);
         harness.run_mc_cycles(10);
-        TEST_ASSERT(dut->pistorm__DOT__prefetch_eligible == 0 && dut->pistorm__DOT__prefetch_valid == 1,
+        TEST_ASSERT(dut->pistorm__DOT__u_m68k__DOT__prefetch_eligible == 0 && dut->pistorm__DOT__u_m68k__DOT__prefetch_valid == 1,
                     "Prefetch Safety: Aligned 32-bit Chip-RAM read successfully completed prefetch cycle");
 
         pi->ps_clr_control(CONTROL_ENABLE_PREFETCH);
