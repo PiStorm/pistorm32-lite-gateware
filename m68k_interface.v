@@ -131,8 +131,13 @@ module m68k_interface (
     output wire [31:0] diag_bus_capture,
     output wire [31:0] diag_cycle_timing,
     output wire [31:0] diag_clock_phase,
+    output wire        phase_calibrated,
+    output wire        fast_read_phase_cal,
+    output wire        current_cck_phase,
     input  wire        prefetch_ctrl_en,
     input  wire        fast_dsack_en,
+    input  wire        cck_sync_en,
+    input  wire        force_phase_invert,
     input  wire        counter_clear
 );
 
@@ -499,6 +504,8 @@ module m68k_interface (
     reg [7:0]  lead_acc             = 8'd0;
     reg        cck_phase_toggle     = 1'b0;
     reg        as_start_phase       = 1'b0;
+    reg        r_phase_calibrated   = 1'b0;
+    reg        r_fast_read_phase    = 1'b1; // Default expectation: Phase 1 is fast read
 
     // 14 MHz Clock Period & Duty Cycle Measurer
     reg [7:0] mc_clk_period_ticks = 8'd0;
@@ -564,6 +571,30 @@ module m68k_interface (
             diag_as_total         <= cyc_timer;
             diag_term_wait_states <= cyc_wait_states;
             diag_dsack_lead_ticks <= lead_acc;
+
+            // Auto-calibrate optimal CCK phase from the first Chip RAM cycle ($000000..$1FFFFF)
+            if (address[23:21] == 3'b000) begin
+                if (!r_phase_calibrated) begin
+                    r_phase_calibrated <= 1'b1;
+                    if (rw) begin
+                        // READ: Fast is <= 7 wait states (6 wait states)
+                        if (cyc_wait_states <= 4'd7)
+                            r_fast_read_phase <= as_start_phase;
+                        else
+                            r_fast_read_phase <= ~as_start_phase;
+                    end else begin
+                        // WRITE: Fast is <= 6 wait states (5 wait states)
+                        if (cyc_wait_states <= 4'd6)
+                            r_fast_read_phase <= ~as_start_phase; // opposite of write
+                        else
+                            r_fast_read_phase <= as_start_phase;
+                    end
+                end
+            end
+        end
+
+        if (counter_clear || reset_sync) begin
+            r_phase_calibrated <= 1'b0;
         end
     end
 
@@ -584,6 +615,17 @@ module m68k_interface (
         mc_clk_high_ticks[7:0],     // [15:8]  High half period in 182 MHz clocks (~6-7)
         mc_clk_low_ticks[7:0]       // [7:0]   Low half period in 182 MHz clocks (~6-7)
     };
+
+    assign phase_calibrated    = r_phase_calibrated;
+    assign fast_read_phase_cal = r_fast_read_phase;
+    assign current_cck_phase   = cck_phase_toggle;
+
+    // CCK Phase Alignment Logic:
+    // Aligns /AS assertion with Alice's 7.09 MHz Colour Clock slot boundary.
+    wire effective_fast_read_phase = r_fast_read_phase ^ force_phase_invert;
+    wire target_start_phase        = rw ? effective_fast_read_phase : ~effective_fast_read_phase;
+    wire is_chip_or_custom         = (address[23:21] == 3'b000) || (address[23:16] == 8'hDF);
+    wire sync_to_cck               = cck_sync_en && is_chip_or_custom;
 
     // Prefetch Safety Filter:
     // Only prefetch from Chip-RAM ($000000..$1FFFFF) or Expansion RAM ($E00000..$FFFFFF).
@@ -726,7 +768,7 @@ module m68k_interface (
             // across byte lanes according to Motorola MC68020UM Table 5-3.
             // -----------------------------------------------------------------
             state[STATE_BIT_WAIT_BUS_CYCLE_START]: begin
-                if (rising) begin // Synchronized with S0
+                if (rising && (!sync_to_cck || (cck_phase_toggle == target_start_phase))) begin // Synchronized with S0 & CCK
                     da_state   <= DA_STATE_IDLE;
                     mc_fc      <= fc;
                     mc_address <= address;

@@ -165,6 +165,11 @@ wire [31:0] diag_cycle_timing;
 wire [31:0] diag_clock_phase;
 wire        prefetch_ctrl_en;
 wire        fast_dsack_en;
+wire        cck_sync_en;
+wire        force_phase_invert;
+wire        phase_calibrated;
+wire        fast_read_phase_cal;
+wire        current_cck_phase;
 wire        counter_clear;
 
 // 1. Raspberry Pi Interface Submodule
@@ -276,8 +281,13 @@ zorro_device #(
     .diag_bus_capture     (diag_bus_capture),
     .diag_cycle_timing    (diag_cycle_timing),
     .diag_clock_phase     (diag_clock_phase),
+    .phase_calibrated     (phase_calibrated),
+    .fast_read_phase_cal  (fast_read_phase_cal),
+    .current_cck_phase    (current_cck_phase),
     .prefetch_ctrl_en     (prefetch_ctrl_en),
     .fast_dsack_en        (fast_dsack_en),
+    .cck_sync_en          (cck_sync_en),
+    .force_phase_invert   (force_phase_invert),
     .counter_clear        (counter_clear)
 );
 
@@ -388,8 +398,13 @@ m68k_interface u_m68k (
     .diag_bus_capture               (diag_bus_capture),
     .diag_cycle_timing              (diag_cycle_timing),
     .diag_clock_phase               (diag_clock_phase),
+    .phase_calibrated               (phase_calibrated),
+    .fast_read_phase_cal            (fast_read_phase_cal),
+    .current_cck_phase              (current_cck_phase),
     .prefetch_ctrl_en               (prefetch_ctrl_en),
     .fast_dsack_en                  (fast_dsack_en),
+    .cck_sync_en                    (cck_sync_en),
+    .force_phase_invert             (force_phase_invert),
     .counter_clear                  (counter_clear)
 );
 

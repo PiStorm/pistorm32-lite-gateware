@@ -499,8 +499,9 @@ static void profile_cycles(volatile ULONG *chip_ptr, const char *title, ULONG ct
 }
 
 static void test_phase_alignment(volatile ULONG *chip_ptr) {
-    profile_cycles(chip_ptr, "Standard Mode (Upstream Golden Parity: FastDSACK=OFF, Prefetch=OFF)", 0x00);
-    profile_cycles(chip_ptr, "Fast DSACK Mode (FastDSACK=ON, Prefetch=OFF)", 0x02);
+    profile_cycles(chip_ptr, "Standard Mode (Upstream Golden Parity: FastDSACK=OFF, CCKSync=OFF)", 0x00);
+    profile_cycles(chip_ptr, "Fast DSACK Mode (FastDSACK=ON, CCKSync=OFF)", 0x02);
+    profile_cycles(chip_ptr, "CCK Phase-Locked Mode (FastDSACK=ON, CCKSync=ON)", 0x06);
 }
 
 int main(int argc, char **argv) {
@@ -556,8 +557,8 @@ int main(int argc, char **argv) {
         }
         ULONG val = strtoul(argv[2], NULL, 0);
         zorro_dev[ZREG_PREF_CTRL / 4] = val;
-        printf("[CONTROL] PREFETCH_CTRL set to 0x%08lX (Prefetch=%d, FastDSACK=%d)\n",
-               val, (int)(val & 1), (int)((val >> 1) & 1));
+        printf("[CONTROL] BUS_CTRL set to 0x%08lX (Prefetch=%d, FastDSACK=%d, CCKSync=%d, PhaseInv=%d)\n",
+               val, (int)(val & 1), (int)((val >> 1) & 1), (int)((val >> 2) & 1), (int)((val >> 3) & 1));
         cleanup_timer();
         return 0;
     }
@@ -643,13 +644,16 @@ int main(int argc, char **argv) {
             const char *name;
             ULONG ctrl;
         } modes[] = {
-            {"Mode 1: Baseline (FastDSACK=OFF, Prefetch=OFF)", 0x00},
-            {"Mode 2: Fast DSACK Only (FastDSACK=ON, Prefetch=OFF)", 0x02},
-            {"Mode 3: Prefetch Only (FastDSACK=OFF, Prefetch=ON)", 0x01},
-            {"Mode 4: Full Turbo (FastDSACK=ON, Prefetch=ON)", 0x03}
+            {"Mode 1: Baseline (FastDSACK=OFF, CCKSync=OFF, Prefetch=OFF)", 0x00},
+            {"Mode 2: Fast DSACK Only (FastDSACK=ON, CCKSync=OFF, Prefetch=OFF)", 0x02},
+            {"Mode 3: CCK Sync Only (FastDSACK=OFF, CCKSync=ON, Prefetch=OFF)", 0x04},
+            {"Mode 4: Fast DSACK + CCK Sync (FastDSACK=ON, CCKSync=ON, Prefetch=OFF)", 0x06},
+            {"Mode 5: Prefetch Only (FastDSACK=OFF, CCKSync=OFF, Prefetch=ON)", 0x01},
+            {"Mode 6: Turbo (FastDSACK=ON, CCKSync=OFF, Prefetch=ON)", 0x03},
+            {"Mode 7: Ultra Turbo (FastDSACK=ON, CCKSync=ON, Prefetch=ON)", 0x07}
         };
 
-        for (int m = 0; m < 4; m++) {
+        for (int m = 0; m < 7; m++) {
             zorro_dev[ZREG_PREF_CTRL / 4] = modes[m].ctrl;
             zorro_dev[ZREG_PREF_LAUNCH / 4] = 0; // Clear counters
 
