@@ -1,15 +1,8 @@
 /*
- * PiStorm32-lite Gateware
+ * PiStorm32-lite Gateware - Amiga 1200 M68k Bus Interface
  *
  * Copyright 2022 Niklas Ekström
- * Copyright 2022 Claude Schwarz
- *
- * 2026 Claude Schwarz Refactor:
- *   - Motorola MC68020 Bus Master Interface & 10-Bit One-Hot FSM
- *   - Dynamic Bus Sizing (8/16/32-Bit Ports per Motorola User's Manual Table 5-4)
- *   - Speculative 32-Bit Read Prefetch Engine with Local Hit Detection
- *   - Universal Amiga 1200 Clock Filter & Glitch Synchronizer
- *   - Multiplexed 32-Bit Address/Data (DA) Bus & PCB Route Deserializer
+ * Copyright 2022-2026 Claude Schwarz
  */
 
 module m68k_interface (

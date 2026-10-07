@@ -1,51 +1,50 @@
-# How PiStorm32-lite Works: The Architecture & Protocol Guide
+# How PiStorm32-lite Works
 
-> **"How does this thing actually work?"**  
-> This document explains step-by-step how a modern ARM host (Raspberry Pi 4 / Compute Module 4) interfaces through the FPGA gateware to seamlessly act as a full-featured Motorola 68020/68030/68040 processor on the Commodore Amiga 1200 motherboard.
+This document explains how the Raspberry Pi, FPGA gateware, and Amiga 1200 motherboard interact during bus operations.
 
 ---
 
-## 1. High-Level Concept & System Topology
+## 1. System Overview
 
-The Commodore Amiga 1200 does not have a soldered-down processor on its motherboard; instead, it features a **150-pin trapdoor CPU expansion slot**. This connector exposes all native Motorola MC68EC020 bus lines (address bus `A[31:0]`, data bus `D[31:0]`, control strobes `_AS`, `_DS`, `_DSACK[1:0]`, interrupt priority levels `_IPL[2:0]`, and bus arbitration lines `_BR`, `_BG`).
+The Amiga 1200 exposes the Motorola 68EC020 bus on a 150-pin trapdoor edge connector. When PiStorm32-lite is installed, it requests the bus via `_BR` and takes over bus mastership when Gary/Gayle asserts `_BG`. The motherboard's onboard 68EC020 CPU is tri-stated and stays idle.
 
-When the PiStorm32-lite is installed:
-1. **Bus Master Takeover:** The FPGA requests and assumes permanent bus mastership via the MC68020 bus arbitration protocol (`_BR` asserted, waiting for `_BG` and `_AS` negated). The onboard 68EC020 CPU is tri-stated and held dormant.
-2. **CPU Emulation on the Raspberry Pi:** The Raspberry Pi runs a high-performance JIT execution engine (such as **EMU68** on bare metal or the PiStorm Linux kernel driver). The ARM core (Cortex-A72 @ 1.5–2.0 GHz) executes Amiga m68k instructions at hundreds of MIPS.
-3. **Hardware Bridge (FPGA):** Whenever emulated software accesses real Amiga physical resources (Chip RAM `$00000000`, Custom Chip registers `$00DFF000`, Kickstart ROM `$00F80000`), the Pi dispatches the request over its parallel GPIO bus to the FPGA.
-4. **Physical Bus Cycles:** The FPGA translates the high-speed request into electrically compliant MC68020 bus cycles for Alice, Paula, Lisa, and the Amiga 1200 motherboard.
+The Raspberry Pi runs an emulator/JIT engine (EMU68 bare-metal or PiStorm Linux):
+- 680x0 CPU instructions execute on the Pi's ARM core.
+- Fast RAM lives in the Pi's LPDDR4 memory and runs at full ARM bus speeds.
+- When code accesses Chip RAM (`$00000000`), custom registers (`$00DFF000`), or Kickstart ROM (`$00F80000`), the Pi routes the access over its GPIO bus to the FPGA.
+- The FPGA runs a 68020 bus master state machine that drives the physical address, data, and strobe signals to the motherboard via 74CB3T3245 3.3V/5V level shifters.
 
 ```mermaid
 flowchart TD
     subgraph Host ["Raspberry Pi 4 / CM4"]
-        EMU68["EMU68 JIT / Linux Engine<br/>(ARM Cortex-A72 @ 1.5 - 2.0 GHz)"]
-        FastRAM["Fast RAM Emulation<br/>(ARM LPDDR4 @ 3.2 GB/s)"]
-        SMI["Parallel GPIO / SMI Bus Controller"]
+        EMU68["EMU68 JIT / Linux Engine"]
+        FastRAM["Pi LPDDR4 (Fast RAM)"]
+        SMI["Parallel GPIO / SMI"]
         EMU68 <--> FastRAM
-        EMU68 -->|Amiga Bus Access| SMI
+        EMU68 -->|Motherboard Access| SMI
     end
 
     subgraph Hardware ["PiStorm32-Lite Hardware"]
-        LevelShifter["74CB3T3245 Bi-Directional<br/>3.3V <--> 5.0V Level Shifters"]
+        LevelShifter["74CB3T3245 Level Shifters<br/>(3.3V <-> 5.0V)"]
         
-        subgraph FPGA ["Efinix Trion T20 FPGA (182 MHz sys_clk)"]
-            PI_IF["pi_interface.v<br/>2-Slot Pipelined FIFO<br/>Prefetch Engine"]
+        subgraph FPGA ["Efinix Trion T20 (182 MHz sys_clk)"]
+            PI_IF["pi_interface.v<br/>2-Slot FIFO & Prefetch"]
             DEC{"Address Decoder"}
-            M68K_IF["m68k_interface.v<br/>MC68020 Bus Master FSM<br/>1.8V Ringing Glitch Filter"]
-            ZORRO_IF["zorro_device.v<br/>Virtual Zorro-II AutoConfig<br/>182 MHz Wishbone B4 Crossbar"]
+            M68K_IF["m68k_interface.v<br/>68020 Bus Master & Clock Filter"]
+            ZORRO_IF["zorro_device.v<br/>Virtual Zorro-II & Wishbone B4"]
             
             PI_IF --> DEC
-            DEC -->|External Memory / Chipset| M68K_IF
+            DEC -->|External Access| M68K_IF
             DEC -->|Internal $00E90000| ZORRO_IF
         end
     end
 
-    subgraph Amiga ["Commodore Amiga 1200 Motherboard (5.0V)"]
+    subgraph Amiga ["Amiga 1200 Motherboard"]
         Trapdoor["150-pin CPU Expansion Port"]
-        Budgie["Budgie Gate Array<br/>(Clock Gen: MC_CLK / CPUCLK)"]
-        Alice["Alice Agnus Controller<br/>(560ns Slot Arbitration)"]
-        ChipRAM["2 MB Motherboard Chip RAM"]
-        Chipset["Custom Chips: Paula, Lisa, CIA-A/B<br/>($00DFF000 - $00DFF1FE)"]
+        Budgie["Budgie (Clock Gen: 14.18 MHz MC_CLK)"]
+        Alice["Alice (560ns Slot Arbitration)"]
+        ChipRAM["2 MB Chip RAM"]
+        Chipset["Custom Chips: Paula, Lisa, CIAs<br/>($00DFF000 - $00DFF1FE)"]
         
         Trapdoor <--> Alice
         Trapdoor <--> Chipset
@@ -60,36 +59,38 @@ flowchart TD
 
 ---
 
-## 2. Raspberry Pi <-> FPGA Parallel Bus Protocol
+## 2. Raspberry Pi Host Interface
 
-The Raspberry Pi communicates with the FPGA over a **16-bit parallel bus** mapped directly to the Pi's 40-pin GPIO header:
+The Pi interfaces to the FPGA using a 16-bit parallel bus on standard GPIO pins:
 
-| GPIO Pins | Signal Name | Direction | Functional Description |
+| GPIO Pins | Signal | Direction | Function |
 | :--- | :--- | :---: | :--- |
-| `GPIO[23:8]` | `PI_D[15:0]` | Bidirectional | Multiplexed 16-bit data bus |
-| `GPIO[26:24]` | `PI_A[2:0]` | Pi $\to$ FPGA | Internal FPGA register address |
-| `GPIO6` | `PI_RD` | Pi $\to$ FPGA | Read strobe (active-low) |
-| `GPIO7` | `PI_WR` | Pi $\to$ FPGA | Write strobe (active-low) |
-| `GPIO[2:0]` | `PI_IPL[2:0]` | FPGA $\to$ Pi | Current Amiga interrupt priority level (active-high inverted `_IPL`) |
-| `GPIO3` | `PI_TXN_IN_PROGRESS` | FPGA $\to$ Pi | Busy flag: 1 = Bus transaction in progress on Amiga bus |
-| `GPIO4` | `PI_KBRESET` | FPGA $\to$ Pi | Filtered keyboard reset signal (Ctrl-Amiga-Amiga) |
+| `GPIO[23:8]` | `PI_D[15:0]` | Bidirectional | Multiplexed data bus |
+| `GPIO[26:24]` | `PI_A[2:0]` | Pi $\to$ FPGA | Register address |
+| `GPIO6` | `PI_RD` | Pi $\to$ FPGA | Read strobe (active low) |
+| `GPIO7` | `PI_WR` | Pi $\to$ FPGA | Write strobe (active low) |
+| `GPIO[2:0]` | `PI_IPL[2:0]` | FPGA $\to$ Pi | Current Amiga interrupt level (active-high inverted `_IPL`) |
+| `GPIO3` | `PI_TXN_IN_PROGRESS` | FPGA $\to$ Pi | Busy flag: 1 = Bus cycle active on Amiga bus |
+| `GPIO4` | `PI_KBRESET` | FPGA $\to$ Pi | Filtered keyboard reset (Ctrl-Amiga-Amiga) |
 
-### Internal FPGA Host Registers (`PI_A[2:0]`)
+### FPGA Host Registers (`PI_A[2:0]`)
 
 ```
-  PI_A = 0 : [ DATA_LO ]  - Data bits [15:0]
-  PI_A = 1 : [ DATA_HI ]  - Data bits [31:16]
-  PI_A = 2 : [ ADDR_LO ]  - Address bits [15:0]
-  PI_A = 3 : [ ADDR_HI ]  - Address bits [23:16], Size [9:8], R/W [10], FC [13:11] -> TRIGGERS TRANSACTION!
+  PI_A = 0 : [ DATA_LO ]  - Data [15:0]
+  PI_A = 1 : [ DATA_HI ]  - Data [31:16]
+  PI_A = 2 : [ ADDR_LO ]  - Address [15:0]
+  PI_A = 3 : [ ADDR_HI ]  - Address [23:16], Size [9:8], R/W [10], FC [13:11] -> Triggers transaction
   PI_A = 4 : [ STATUS  ]  - Read: Status / Write: CONTROL (Reset, Halt, Prefetch, IRQ)
-  PI_A = 5 : [ SLOT    ]  - Request slot selection (Slot 0 / Slot 1)
+  PI_A = 5 : [ SLOT    ]  - Request slot select (0 or 1)
 ```
+
+Writing to `ADDR_HI` (`PI_A = 3`) starts the transaction on the FPGA.
 
 ---
 
-## 3. Amiga Motherboard Read Transaction Flow
+## 3. Read Transactions
 
-When the CPU emulation executes a 32-bit read from Chip RAM (`move.l ($00040000), d0`):
+When the Pi needs to read 32 bits from Chip RAM (e.g., `move.l ($00040000), d0`):
 
 ```mermaid
 sequenceDiagram
@@ -97,162 +98,157 @@ sequenceDiagram
     participant Pi as Raspberry Pi (EMU68)
     participant PI_IF as pi_interface.v
     participant M68K as m68k_interface.v
-    participant Amiga as Amiga 1200 (Alice / Chip RAM)
+    participant Amiga as Amiga 1200 (Alice / RAM)
 
-    Note over Pi,PI_IF: 1. Host sets target address
+    Note over Pi,PI_IF: 1. Pi sets target address
     Pi->>PI_IF: Write ADDR_LO = 0x0000 (PI_A=2)
     Pi->>PI_IF: Write ADDR_HI = 0x0004 | READ | SIZE_32 (PI_A=3)
-    Note over PI_IF: Falling edge of PI_WR on ADDR_HI<br/>triggers new_req_valid strobe!
+    Note over PI_IF: Falling edge on PI_WR triggers new_req_valid
 
-    Note over PI_IF,M68K: 2. Dispatch to m68k bus FSM
-    PI_IF->>M68K: new_req_valid (Slot 0, Addr: 0x00040000, Size: Longword, RW: 1)
+    Note over PI_IF,M68K: 2. Dispatch to 68020 FSM
+    PI_IF->>M68K: new_req_valid (Slot 0, Addr: 0x00040000, Longword, Read)
     
-    Note over M68K,Amiga: 3. MC68020 Bus Cycle (States S0 -> S5)
+    Note over M68K,Amiga: 3. MC68020 Bus Cycle (S0 -> S5)
     M68K->>Amiga: Drive MC_A = 0x00040000, R/W = 1
-    M68K->>Amiga: Assert MC_AS_n = LOW, MC_DS_n = LOW (State S1)
+    M68K->>Amiga: Assert MC_AS_n = LOW, MC_DS_n = LOW (S1)
     
-    Note over Amiga: Alice synchronizes to 560ns slot.<br/>RAM drives data onto bus.
-    Amiga-->>M68K: Pull MC_DSACK[1:0]_n = LOW (32-bit port ready)
+    Note over Amiga: Alice syncs to 560ns slot.<br/>RAM drives data.
+    Amiga-->>M68K: MC_DSACK[1:0]_n = LOW (32-bit port ready)
     
-    Note over M68K: 4. Unconditional latch on falling clock edge
+    Note over M68K: 4. Latch data on falling clock edge
     M68K->>M68K: mc_data_read <= DA_IN (0x12345678)
-    M68K->>Amiga: Negate MC_AS_n, MC_DS_n (State S5)
+    M68K->>Amiga: Negate MC_AS_n, MC_DS_n (S5)
     
-    Note over M68K,PI_IF: 5. Handshake completion
+    Note over M68K,PI_IF: 5. Complete slot
     M68K->>PI_IF: slot_complete_valid (Data: 0x12345678, Normal: 1)
-    Note over PI_IF: req_active[0] <= 0<br/>PI_TXN_IN_PROGRESS returns LOW
+    Note over PI_IF: req_active[0] <= 0, PI_TXN_IN_PROGRESS = 0
 
-    Note over Pi,PI_IF: 6. Host reads back data
-    Pi->>PI_IF: Read DATA_LO (PI_A=0, PI_RD=0)
-    PI_IF-->>Pi: Returns 0x5678
-    Pi->>PI_IF: Read DATA_HI (PI_A=1, PI_RD=0)
-    PI_IF-->>Pi: Returns 0x1234
+    Note over Pi,PI_IF: 6. Pi reads back data
+    Pi->>PI_IF: Read DATA_LO (PI_A=0) -> 0x5678
+    Pi->>PI_IF: Read DATA_HI (PI_A=1) -> 0x1234
 ```
 
 ---
 
-## 4. Pipelined Two-Request-Slot Engine (High-Speed Writes)
+## 4. Two-Request-Slot Pipeline (Writes)
 
-During back-to-back writes (such as copying a bitmap or framebuffer into Chip RAM), a naive single-slot bus master would force the Raspberry Pi CPU to stall while the slow Amiga motherboard completes each **560 ns** bus slot.
+Chip RAM writes take 560 ns each due to Alice's slot timing. If the Pi waited synchronously for every write to complete, software writes would be blocked by bus latency.
 
-PiStorm32-lite eliminates this bottleneck using a **Pipelined Two-Request-Slot Queue**:
-- While **Slot 0** is executing on the Amiga motherboard, the Raspberry Pi concurrently submits the data and address for **Slot 1** into the FPGA.
-- The instant Slot 0 completes on the Amiga bus, the FPGA transitions seamlessly into Slot 1 with zero idle cycles.
-- This decoupling allows write throughput to reach **7.03 MB/s (6.71 MiB/s)**—the absolute theoretical maximum of the Amiga 1200 32-bit Chip RAM bus.
+The two-request-slot pipeline removes this delay:
+- While **Slot 0** is executing on the motherboard, the Pi writes the next data and address into **Slot 1**.
+- As soon as Slot 0 finishes, the FPGA immediately begins Slot 1 with zero idle cycles.
+- This keeps the Amiga bus fully saturated at **7.03 MB/s (6.71 MiB/s)**.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Pi as Raspberry Pi (ARM)
+    participant Pi as Raspberry Pi
     participant Slot0 as Request Slot 0
     participant Slot1 as Request Slot 1
     participant Bus as Amiga Motherboard Bus
 
-    Note over Pi,Slot0: Pi submits Write Transaction #1
     Pi->>Slot0: Write DATA_LO, DATA_HI, ADDR_LO, ADDR_HI
-    Note over Slot0,Bus: Slot 0 active -> Amiga bus cycle starts!
-    Slot0->>Bus: Amiga Bus Cycle #1 (Duration: 560 ns)
+    Note over Slot0,Bus: Slot 0 active -> cycle starts
+    Slot0->>Bus: Amiga Bus Cycle #1 (560 ns)
 
-    Note over Pi,Slot1: Pi does NOT stall! Immediately switches to Slot 1:
+    Note over Pi,Slot1: Pi switches to Slot 1 immediately:
     Pi->>Slot1: Write DATA_LO, DATA_HI, ADDR_LO, ADDR_HI
-    Note over Slot1: Slot 1 queued & primed in FPGA FIFO
+    Note over Slot1: Slot 1 queued in FPGA
 
-    Note over Bus,Slot0: Amiga finishes Cycle #1
     Bus-->>Slot0: DSACK acknowledged (Slot 0 done)
     
-    Note over Slot1,Bus: FPGA launches Slot 1 without a single idle clock!
-    Slot1->>Bus: Amiga Bus Cycle #2 (Duration: 560 ns)
+    Note over Slot1,Bus: FPGA starts Slot 1 with no idle cycles
+    Slot1->>Bus: Amiga Bus Cycle #2 (560 ns)
 ```
 
 ---
 
-## 5. Speculative Read-Prefetch Engine
+## 5. Speculative Read Prefetch
 
-When software reads instructions or sequential data structures, memory accesses are predominantly consecutive longwords: `$00040000`, `$00040004`, `$00040008`, ...
+Code execution and data copies often read memory in sequential longwords (`$00040000`, `$00040004`, `$00040008`, ...).
 
-Because each Chip RAM read requires a 560 ns motherboard slot, sequential reading typically limits throughput to $4.73\text{ MB/s}$.
-
-**How PiStorm32-lite Speculative Prefetch Works:**
-1. When the host reads address $A$, the FPGA completes the bus cycle normally.
-2. Even **before** the Pi requests the next longword, the FPGA speculates: *"The next requested address is almost certainly $A+4$!"*
-3. The FPGA immediately launches an autonomous Amiga bus cycle for address $A+4$ and stores the returned longword in a local prefetch buffer.
-4. When the Pi subsequently requests address $A+4$ $\rightarrow$ **Cache Hit!**
-5. The FPGA serves the data **instantaneously from the prefetch buffer with zero Amiga bus latency**!
-6. Throughput surges from **$4.73\text{ MB/s}$ to $7.04\text{ MB/s}$ (+48.8% acceleration)**!
+With prefetch enabled:
+1. When the Pi reads address $A$, the FPGA completes the cycle normally.
+2. The FPGA immediately starts a speculative cycle for address $A+4$ on the Amiga bus and buffers the result.
+3. When the Pi requests address $A+4$, the FPGA serves the buffered data immediately with zero bus wait states (**Cache Hit**).
+4. If the Pi jumps to an unrelated address (branch), the prefetch buffer is invalidated and a normal bus cycle is run (**Cache Miss**).
+5. Sequential 32-bit reads speed up from **4.73 MB/s to 7.04 MB/s (+48.8%)**.
 
 ```mermaid
 flowchart TD
-    Req["Host requests Read at address A"] --> Exec["Execute Amiga bus cycle for address A"]
-    Exec --> Latch["Return Data(A) to Host"]
+    Req["Pi reads address A"] --> Exec["Run Amiga bus cycle for address A"]
+    Exec --> ReturnData["Return Data(A) to Pi"]
     
-    Latch --> PrefetchEnabled{"Prefetch enabled &<br/>32-bit transfer?"}
-    PrefetchEnabled -- No --> Done["Complete"]
+    ReturnData --> PrefetchOn{"Prefetch enabled &<br/>32-bit read?"}
+    PrefetchOn -- No --> Done["Done"]
     
-    PrefetchEnabled -- Yes --> StartPrefetch["FPGA speculatively initiates Amiga bus cycle for address (A + 4)"]
-    StartPrefetch --> Store["Store data in prefetch cache & assert valid = 1"]
+    PrefetchOn -- Yes --> FetchAhead["FPGA starts speculative cycle for (A + 4)"]
+    FetchAhead --> Buffer["Save data in prefetch buffer (valid = 1)"]
     
-    Store --> NextReq["Next request arrives from Host (Address B)"]
-    NextReq --> HitCheck{"Is B == (A + 4) &<br/>Prefetch valid?"}
+    Buffer --> NextReq["Next read request from Pi (Address B)"]
+    NextReq --> HitCheck{"B == (A + 4) &<br/>valid?"}
     
-    HitCheck -- "YES (PREFETCH HIT!)" --> InstantReturn["Instant return from FPGA cache!<br/>Zero Amiga wait states (+48.8% Speedup)"]
-    HitCheck -- "NO (BRANCH / MISS)" --> Invalidate["Discard prefetch (flush)<br/>Launch standard Amiga bus cycle"]
+    HitCheck -- "Hit" --> InstantReturn["Return buffered data immediately<br/>(0 wait states, 7.04 MB/s)"]
+    HitCheck -- "Miss" --> Invalidate["Flush buffer, run standard cycle for B"]
 ```
 
 ---
 
-## 6. Virtual Zorro-II AutoConfig & Wishbone Bus (182 MHz Interconnect)
+## 6. Virtual Zorro-II & Wishbone Interconnect
 
-When the Raspberry Pi or an AmigaOS driver accesses memory within the range `$00E90000`–`$00E9FFFF`:
-- The internal address decoder recognizes the virtual expansion card.
-- External Amiga bus drivers (`ADDR_OE#`, `DATA_OE#`, `AS#`, `DS#`) remain **completely tri-stated (Hi-Z)**.
-- The transaction is routed directly to the internal **Wishbone B4 Crossbar** running at **182 MHz** with **0 wait states** ($13.5\text{ MB/s}$).
-- The Amiga motherboard bus remains 100% idle, allowing DMA channels (Blitter, Copper, Audio) to operate with zero contention.
+Addresses in the range `$00E90000`–`$00E9FFFF` are assigned to the virtual Zorro-II expansion card:
+- Address decoding happens inside the FPGA.
+- The external Amiga bus lines (`AS#`, `DS#`, `ADDR_OE#`, `DATA_OE#`) remain high and tri-stated.
+- Transactions are routed to the internal **Wishbone B4 bus** running at **182 MHz** with **0 wait states** ($13.5\text{ MB/s}$).
+- The Amiga bus is completely untouched, leaving full bandwidth for chipset DMA (display, sound, blitter).
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Pi as Raspberry Pi / Amiga CPU
-    participant Dec as FPGA Address Decoder
-    participant WB as Wishbone B4 Master
-    participant Slave as Wishbone Slave (e.g. GPIO / Mailbox)
-    participant Amiga as Amiga Motherboard Bus (Alice)
+    participant Dec as Address Decoder
+    participant WB as Wishbone Master
+    participant Slave as Wishbone Slave (GPIO/Mailbox)
+    participant Amiga as Amiga Motherboard Bus
 
-    Pi->>Dec: Access Address $00E90200 (GPIO Matrix)
-    Note over Dec: Internal address range detected!
+    Pi->>Dec: Read/Write $00E90200
+    Note over Dec: Address is internal ($00E9xxxx)
     
-    par FPGA Internal (0 Wait-States)
+    par Internal Wishbone (182 MHz)
         Dec->>WB: wb_cyc = 1, wb_stb = 1, wb_adr = 0x0200
-        WB->>Slave: Read / Write Register
-        Slave-->>WB: wb_ack = 1 (1 cycle @ 182 MHz!)
-        WB-->>Pi: Transfer complete (282 ns host latency)
-    and Amiga Bus Status
-        Note over Amiga: Amiga Bus remains 100% ISOLATED!<br/>MC_AS_n = HIGH, MC_DS_n = HIGH<br/>Zero bus loading, 0 motherboard cycles.
+        WB->>Slave: Register access
+        Slave-->>WB: wb_ack = 1 (1 clock @ 182 MHz)
+        WB-->>Pi: Data ready (282 ns host latency)
+    and Amiga Bus (Isolated)
+        Note over Amiga: MC_AS_n = HIGH, MC_DS_n = HIGH<br/>Level shifters tri-stated<br/>0 motherboard cycles consumed
     end
 ```
 
 ---
 
-## 7. The 1.8V Ringing Glitch Filter on MC_CLK (CPUCLK)
+## 7. Motherboard Clock Ringing & The Lockout Filter
 
-On unmodded Commodore Amiga 1200 motherboards (notably Rev 1D.4 and Rev 2B), ferrite beads and capacitors (`E121`, `E122`) on the **`MC_CLK` / `CPUCLK` (14.18 MHz)** clock line create transmission line reflections. On the falling edge, this produces severe ringing that dips back into the **1.8 Volt** threshold zone:
+Commodore Amiga 1200 motherboards (especially revisions 1D.4 and 2B) have ferrite beads (`E121`, `E122`) on the **14.18 MHz `CPUCLK` (`MC_CLK`)** trace. These cause inductive ringing on the falling clock edge, dipping down to around **1.8V**:
 
 ```
-Amiga MC_CLK (CPUCLK 14.18 MHz) Oscilloscope Waveform:
+14.18 MHz MC_CLK (CPUCLK) Ringing Waveform:
 5.0V |-------+
      |        \
-2.0V |---------\---[ Logic HIGH / VIH Threshold ]----------------------
+2.0V |---------\---[ VIH Threshold ]-----------------------------
      |          \
-1.8V |           \   /---\  <-- 1.8V Ringing Dip!
-     |            \_/     \     (Unfiltered: triggers false clock edge!)
-0.8V |---------------------\-[ Logic LOW / VIL Threshold ]-------------
+1.8V |           \   /---\  <-- 1.8V Ringing Dip (false edge risk)
+     |            \_/     \
+0.8V |---------------------\-[ VIL Threshold ]-------------------
      |                      \
-0.0V |                       +-----------------------------------------
+0.0V |                       +-----------------------------------
 ```
 
-### Hardware Implementation in `m68k_interface.v`:
-1. The FPGA oversamples `MC_CLK` using its internal **182 MHz PLL clock** (`sys_clk`), yielding $\approx 13$ samples per 14.18 MHz clock cycle.
-2. A **2-stage synchronizer** (`mc_clk_raw_sync[1:0]`) eliminates metastability.
-3. A **lockout filter counter** (`MC_CLK_LOCKOUT_TICKS = 3`) locks out the edge detector for 3 `sys_clk` cycles ($16.5\text{ ns}$), suppressing false bounces while guaranteeing that legitimate rising and falling edges are detected with zero delay:
+If an unfiltered input buffer samples during the dip, it can register a false clock edge, desynchronizing the bus state machine.
+
+### Implementation in `m68k_interface.v`:
+1. `MC_CLK` is sampled by the 182 MHz internal PLL clock (`sys_clk`), giving ~13 samples per 14.18 MHz clock cycle.
+2. A 2-stage synchronizer (`mc_clk_raw_sync`) removes metastability.
+3. A 3-tick lockout counter (`MC_CLK_LOCKOUT_TICKS = 3`) locks out edge detection for 3 `sys_clk` cycles ($16.5\text{ ns}$) after each transition, blanking out the 1.8V bounce:
 
 ```verilog
 localparam [2:0] MC_CLK_LOCKOUT_TICKS = 3'd3;

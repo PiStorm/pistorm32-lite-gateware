@@ -1,21 +1,8 @@
 /*
- * PiStorm32-lite Gateware
+ * PiStorm32-lite Gateware - Virtual Zorro-II AutoConfig & Wishbone Subsystem
  *
  * Copyright 2022 Niklas Ekström
- * Copyright 2022 Claude Schwarz
- *
- * 2026 Claude Schwarz Refactor:
- *   - Virtual Zorro-II AutoConfig 64KB I/O Device
- *   - Wishbone B4 Pipelined/Classic Interconnect Architecture
- *   - Timing-Isolated Peripheral Bus with Handshake (access_valid / access_ready)
- *   - Dedicated Amiga Interrupt Subsystem (INT2 Paula / INT6 CIA-B)
- *   - Manufacturer ID 28020 (0x6D74), Product ID 0x32 (PiStorm32), Rev 0x01
- *   - Daisy-Chain Pass-Through: Hides $00E80000 while unconfigured, then
- *     transparently forwards accesses to real external Zorro busboards
- *   - 64KB Address Map:
- *       $0000..$00FF: Slave 0 - Core Registers & Interrupt Management
- *       $0100..$01FF: Slave 1 - Peripheral Slot (SPI Master Drop-in)
- *       $0200..$FFFF: Unmapped space (terminates safely with 0)
+ * Copyright 2022-2026 Claude Schwarz
  */
 
 module zorro_device #(

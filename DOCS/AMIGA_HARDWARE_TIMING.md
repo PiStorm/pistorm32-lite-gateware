@@ -1,10 +1,19 @@
-# Amiga 1200 Hardware Timing & Bus Protocol Reference
+# Amiga 1200 Bus & Clock Timing
 
-## 1. Executive Summary & Hardware Context
+This document covers the Amiga 1200 CPU bus architecture, clocking quirks, the E121/E122 ringing issue, dynamic bus sizing, and throughput measurements.
 
-The **PiStorm32-lite** bridges modern high-speed host platforms (e.g., Raspberry Pi 4 / Compute Module 4 via high-speed parallel GPIO/SMI) to the vintage **Commodore Amiga 1200 150-pin CPU expansion bus**.
+---
 
-While modern ARM cores operate at gigahertz frequencies, the Amiga 1200 motherboard relies on a synchronous 1990s microcomputer bus architecture dictated by the **Commodore AGA Chipset** (Alice, Lisa, Paula, and Budgie). Achieving 100% stability, zero data corruption, and maximum theoretical throughput across all motherboard revisions requires meticulous attention to clock synchronization, transmission-line ringing, dynamic bus sizing, and bus slot arbitration.
+## 1. Motherboard Clock Architecture
+
+The Amiga 1200 motherboard generates clocks from a single master crystal:
+- **PAL:** 28.37516 MHz
+- **NTSC:** 28.63636 MHz
+
+The Budgie gate array divides this to produce the primary system clocks:
+- **`CPUCLK` (`MC_CLK`):** 14.18758 MHz PAL / 14.31818 MHz NTSC (approx. 70.5 ns period). This clock is routed to Pin 87 of the 150-pin trapdoor expansion connector.
+- **`CCK` (Colour Clock):** 7.09379 MHz (approx. 140.9 ns period), used internally by Alice and the custom chips.
+- **`CLK90`:** 7.09 MHz quadrature clock shifted 90 degrees for DRAM and chipset timing.
 
 ```
        +-------------------------------------------------------------+
@@ -12,7 +21,7 @@ While modern ARM cores operate at gigahertz frequencies, the Amiga 1200 motherbo
        |                                                             |
        |  +--------------------+        +-------------------------+  |
        |  | Alice (Chip RAM &  |        | Budgie (Bus Controller  |  |
-       |  |  Custom Agnus Eng) |        |  & Clock Generator)     |  |
+       |  |  Custom Chipsets)  |        |  & Clock Generator)     |  |
        |  +---------+----------+        +------------+------------+  |
        |            | 560ns                          | MC_CLK (14.18 MHz)|
        |            | Alice Slot                     | (Pin 87 CPUCLK)   |
@@ -25,7 +34,7 @@ While modern ARM cores operate at gigahertz frequencies, the Amiga 1200 motherbo
        +-----------------------------v-------------------------------+
        |               PiStorm32-Lite (Efinix T20 FPGA)              |
        |                                                             |
-       |   [ 2-Stage CDC Sync ] ---> [ 1.8V Ringing Glitch Filter ]  |
+       |   [ 2-Stage CDC Sync ] ---> [ Lockout Filter (3 ticks) ]    |
        |                                      |                      |
        |                           [ 182 MHz sys_clk PLL ]           |
        |                                      |                      |
@@ -36,42 +45,33 @@ While modern ARM cores operate at gigahertz frequencies, the Amiga 1200 motherbo
 
 ---
 
-## 2. Motherboard Clock Architecture & The 1.8V Ringing Glitch
+## 2. The E121/E122 Clock Ringing Issue
 
-### 2.1 Clock Generation
-The Amiga 1200 master clock oscillator operates at:
-- **PAL:** $28.37516\text{ MHz}$
-- **NTSC:** $28.63636\text{ MHz}$
+On several motherboard revisions (notably Rev 1D.4 and Rev 2B), Commodore installed ferrite beads and capacitors (`E121`, `E122`, `E123`, `E125`) on the clock lines to meet FCC/CE emissions standards.
 
-The Budgie custom gate array divides the master oscillator to produce:
-- **MC_CLK / CPUCLK:** $14.18758\text{ MHz}$ PAL / $14.31818\text{ MHz}$ NTSC (approx. $70.5\text{ ns}$ cycle time). Routed directly to Pin 87 of the 150-pin trapdoor CPU slot.
-- **CCK (Colour Clock):** $7.09379\text{ MHz}$ (approx. $140.9\text{ ns}$ cycle time, used internally by Alice and the custom chips).
-- **CLK90:** Quadrature clock phase shifted by $90^\circ$ for DRAM and chipset multiplexing.
-
-### 2.2 Motherboard Revisions & The E121/E122 Clock Ringing Issue
-Certain Commodore Amiga 1200 motherboard revisions (specifically **Rev 1D.4** and **Rev 2B**) were shipped from the factory with ferrite beads and capacitors (`E121`, `E122`, `E123`, `E125`) on the `CPUCLK` clock trace. These passive components were intended to pass FCC/CE electromagnetic emissions tests, but created severe impedance mismatches:
-
-1. **Transmission Line Reflections:** The clock lines act as unterminated transmission lines with high capacitive loading.
-2. **Falling Edge Ringing Dips:** On the falling edge of `MC_CLK` (`CPUCLK`), severe ringing causes a signal dip down to $\approx 1.8\text{ V}$ before settling below $V_{IL}$ ($0.8\text{ V}$).
-3. **Threshold Crossing Hazard:** In standard 3.3V LVCMOS or 5V TTL input buffers, an undershoot/bounce to $1.8\text{ V}$ falls directly within the undefined logic threshold region ($0.8\text{ V} < V < 2.0\text{ V}$). Without filtering, the FPGA detects false clock edges, triggering phantom state transitions in the bus state machine and freezing the Amiga.
+On the `CPUCLK` line, these passives create an impedance mismatch:
+1. The line acts as an unterminated transmission line with capacitive loading.
+2. On the falling edge, severe ringing causes a signal dip down to ~1.8V before settling below $V_{IL}$ (0.8V).
+3. Because 1.8V falls within the undefined logic threshold region ($0.8\text{ V} < V < 2.0\text{ V}$), an unfiltered input can detect a false rising edge, throwing the bus state machine out of step.
 
 ```
- Signal Voltage (V)
+ Voltage (V)
    5.0V |-----+
         |      \
         |       \
    2.0V |--------\---[ VIH Threshold ]-----------------------------
         |         \
-   1.8V |          \   /---\  <-- Severe 1.8V Ringing Dip / Glitch!
-        |           \_/     \     (Unfiltered: triggers false edge!)
+   1.8V |          \   /---\  <-- 1.8V Ringing Dip (false edge risk)
+        |           \_/     \
    0.8V |--------------------\-[ VIL Threshold ]-------------------
         |                     \
    0.0V |                      +-----------------------------------
         +--------------------------------------------------------> Time (ns)
 ```
 
-### 2.3 PiStorm32-lite Glitch Filter Implementation
-To ensure **Priority #1 (rock-solid stability on unmodded Amiga motherboards)**, `m68k_interface.v` incorporates a multi-stage filtering and Clock Domain Crossing (CDC) pipeline using a 3-tick lockout counter:
+### Glitch Filter Implementation
+
+In `m68k_interface.v`, `MC_CLK` is synchronized and filtered using the 182 MHz internal PLL clock:
 
 ```verilog
 localparam [2:0] MC_CLK_LOCKOUT_TICKS = 3'd3;
@@ -79,8 +79,8 @@ localparam [2:0] MC_CLK_LOCKOUT_TICKS = 3'd3;
 (* async_reg = "true" *) reg [1:0] mc_clk_raw_sync = 2'b00;
 reg       mc_clk_filtered = 1'b0;
 reg [2:0] mc_clk_lockout  = 3'd0;
-reg       rising          = 1'b0; // 1-cycle pulse on filtered 14 MHz rising edge
-reg       falling         = 1'b0; // 1-cycle pulse on filtered 14 MHz falling edge
+reg       rising          = 1'b0;
+reg       falling         = 1'b0;
 
 always @(posedge clk) begin
     mc_clk_raw_sync <= {mc_clk_raw_sync[0], MC_CLK};
@@ -103,88 +103,74 @@ always @(posedge clk) begin
 end
 ```
 
-- **Frequency Ratio:** `sys_clk` runs at $\approx 182\text{ MHz}$ ($5.49\text{ ns}$ period), while `MC_CLK` runs at $\approx 14.18\text{ MHz}$ ($70.5\text{ ns}$ period).
-- There are $\approx 13$ `sys_clk` cycles in every `MC_CLK` clock cycle.
-- The 2-stage synchronizer (`mc_clk_raw_sync`) removes metastability.
-- The lockout filter suppresses re-triggering for $3 \times t_{\text{sys\_clk}} \approx 16.5\text{ ns}$, completely blanking out the 1.8V ringing dip without adding any latency to legitimate edge detection.
+- With `sys_clk` at 182 MHz ($5.49\text{ ns}$ period), there are ~13 internal ticks per 14.18 MHz `MC_CLK` cycle.
+- A 2-stage synchronizer (`mc_clk_raw_sync`) removes metastability.
+- The lockout counter ignores signal changes for 3 `sys_clk` ticks ($16.5\text{ ns}$) after each valid edge, which completely blankets the 1.8V ringing dip.
 
 ---
 
 ## 3. Bus Slot Timing & Dynamic Bus Sizing
 
-### 3.1 The 560ns Alice Chip RAM Slot
-In the Commodore Amiga architecture, Chip RAM (`$00000000`–`$001FFFFF`) is shared between the CPU and the Agnus/Alice custom chip (display DMA, audio, floppy, and Blitter).
+### 3.1 560ns Alice Chip RAM Slot
+Chip RAM (`$00000000`–`$001FFFFF`) is shared between the CPU and Alice (display DMA, audio, floppy, and blitter).
+- Alice allocates bus access in slots of **4 Colour Clocks (CCK)** = **8 `MC_CLK` cycles**:
+  $$\text{Slot Duration} = 4 \times 140.94\text{ ns} = 8 \times 70.47\text{ ns} \approx 563.8\text{ ns}$$
+- The CPU can only access Chip RAM during CPU slots or when DMA channels are idle.
+- Bus cycles on the motherboard must synchronize with this 560 ns slot boundary.
 
-- Alice arbitrates access in slots of **4 Colour Clocks (CCK)**:
-  $$\text{Slot Duration} = 4 \times 140.94\text{ ns} = 563.76\text{ ns} \approx 560\text{ ns}$$
-- The CPU (or accelerator) can only access Chip RAM during CPU slots or when DMA channels are idle.
-- Any bus cycle initiated by the accelerator must synchronize with Alice's bus slot boundary.
+### 3.2 Dynamic Bus Sizing (MC68020)
+The FPGA interfaces to the Amiga via the standard Motorola 68020 bus protocol:
 
-### 3.2 Dynamic Bus Sizing (MC68020 Protocol)
-The PiStorm32-lite interfaces to the Amiga 1200 bus via the full Motorola MC68020 bus specification:
-
-| DSACK1 | DSACK0 | Bus Width | Data Port Routing | Bus Cycle Action |
+| DSACK1 | DSACK0 | Port Width | Data Port Routing | Bus Cycle Action |
 | :---: | :---: | :---: | :---: | :--- |
-| 1 | 1 | No Ack | None | Insert wait states (wait for slave) |
+| 1 | 1 | No Ack | None | Insert wait states |
 | 1 | 0 | 8-bit | `D[31:24]` | Byte port; CPU repeats cycle for remaining bytes |
-| 0 | 1 | 16-bit | `D[31:16]` | Word port; CPU repeats cycle for upper/lower words |
-| 0 | 0 | 32-bit | `D[31:0]` | Longword port; Full 32-bit transfer completed |
+| 0 | 1 | 16-bit | `D[31:16]` | Word port; CPU repeats cycle for next word |
+| 0 | 0 | 32-bit | `D[31:0]` | Longword port; 32-bit transfer completes |
 
 ### 3.3 Custom Chipset 16-Bit Operation ($00DFF000)
-The Amiga Custom Chipset registers (`$00DFF000`–`$00DFF1FE`) reside on a **physically 16-bit data bus**.
-- **16-bit Word Access (`move.w`):** Motherboard asserts `DSACK1=0, DSACK0=1`. Completed in a single 560ns slot.
-- **32-bit Longword Access (`move.l`):** 
-  - Most Amiga software uses 16-bit writes to custom registers.
-  - If software executes a 32-bit access, the MC68020 dynamic bus sizing hardware splits the transfer into two consecutive 16-bit bus cycles (Cycle 1: `D[31:16]`, Cycle 2: `D[15:0]`), requiring two 560ns slots ($\approx 1120\text{ ns}$ total).
+The custom chip registers are physically on a 16-bit data bus.
+- **16-bit word access (`move.w`):** Motherboard asserts `DSACK1=0, DSACK0=1`. Completes in a single 560 ns slot.
+- **32-bit longword access (`move.l`):** Almost all Amiga software accesses custom chips via 16-bit words. If 32-bit access is performed, the 68020 FSM splits the transfer into two consecutive 16-bit bus cycles (Cycle 1: `D[31:16]`, Cycle 2: `D[15:0]`), taking two slots (~1120 ns total).
 
 ---
 
-## 4. Performance & Bustest Mathematics
+## 4. Throughput & `bustest` Math
 
-### 4.1 Decimal MB/s vs. Binary MiB/s
-A common source of confusion in Amiga benchmarking is the metric reported by tools like `bustest`:
+### Decimal MB/s vs. Binary MiB/s
+Benchmarking tools on the Amiga (like `bustest`) calculate throughput using decimal megabytes ($10^6\text{ bytes/s}$):
 
-- **Decimal Metric ($10^6\text{ bytes/s}$):** Used by `bustest` and standard storage/networking benchmarks.
-  $$\text{Throughput}_{\text{decimal}} = \frac{\text{Bytes Transferred}}{10^6 \times \Delta t_{\text{seconds}}}$$
-- **Binary Metric ($2^{20} = 1,048,576\text{ bytes/s}$):** Strictly MiB/s.
-  $$\text{Throughput}_{\text{binary}} = \frac{\text{Bytes Transferred}}{1,048,576 \times \Delta t_{\text{seconds}}}$$
+$$\text{Throughput}_{\text{decimal}} = \frac{\text{Bytes Transferred}}{10^6 \times \Delta t_{\text{seconds}}}$$
 
-### 4.2 Exact Mathematical Derivation of 32-bit Chip RAM Write
-For 32-bit Chip RAM writes under the 2-request-slot pipelined architecture:
+In binary mebibytes ($2^{20} = 1,048,576\text{ bytes/s}$):
+
+$$\text{Throughput}_{\text{binary}} = \frac{\text{Bytes Transferred}}{1,048,576 \times \Delta t_{\text{seconds}}}$$
+
+### 32-bit Chip RAM Write Calculation
+For 32-bit Chip RAM writes using the 2-request-slot pipeline:
 - 1 Longword = 4 bytes.
-- Slot time $= 563.76\text{ ns}$ (plus $\approx 4.7\text{ ns}$ handshake overhead $= 568.5\text{ ns}$).
-- Decimal Throughput:
-  $$\frac{4\text{ bytes}}{568.5 \times 10^{-9}\text{ s}} = 7,036,060\text{ bytes/s} \approx \mathbf{7.04\text{ MB/s}}$$
-- Binary Throughput:
+- Slot time $= 563.8\text{ ns}$ (plus $\approx 4.7\text{ ns}$ handshaking overhead $= 568.5\text{ ns}$).
+- **Decimal Throughput:**
+  $$\frac{4\text{ bytes}}{568.5 \times 10^{-9}\text{ s}} \approx \mathbf{7.04\text{ MB/s}}$$
+- **Binary Throughput:**
   $$\frac{7,036,060}{1,048,576} \approx \mathbf{6.71\text{ MiB/s}}$$
 
-Both values represent the identical underlying physical timing.
+Both describe the identical physical bus speed.
 
 ---
 
-## 5. Golden Reference Side-by-Side Timing Verification
+## 5. Golden Reference Verification
 
-The enhanced modular refactor is continuously verified against Niklas Ekström's unmodified upstream GitHub code (`origin/two-request-slots:PS32-lite.v`) as the **Golden Reference**.
+The gateware is verified against Niklas Ekström's upstream code (`two-request-slots` branch) using a side-by-side Verilator co-simulation harness:
 
-```
-======================================================================================================================================
-                      PiStorm32-lite: Upstream Golden Reference vs Enhanced Modular Refactor
-======================================================================================================================================
-Benchmark Transaction              Golden Cyc   Refactor Cyc   Delta Cyc  Golden (Bustest)  Refactor (Bustest)     MiB/s    Parity Status       
---------------------------------------------------------------------------------------------------------------------------------------
-Chipmem 32-bit Write (2-Slot)          64 cyc         64 cyc       0 cyc         7.03 MB/s           7.03 MB/s    (6.71)    EXACT MATCH (100%)
-Chipmem 16-bit Word Write              64 cyc         64 cyc       0 cyc         3.53 MB/s           3.53 MB/s    (3.36)    EXACT MATCH (100%)
-Chipmem 16-bit Word Read               64 cyc         64 cyc       0 cyc         2.58 MB/s           2.58 MB/s    (2.46)    EXACT MATCH (100%)
-Chipset 16-bit Word Write              64 cyc         64 cyc       0 cyc         2.58 MB/s           2.58 MB/s    (2.46)    EXACT MATCH (100%)
-Chipset 16-bit Word Read               64 cyc         64 cyc       0 cyc         2.58 MB/s           2.58 MB/s    (2.46)    EXACT MATCH (100%)
-Chipset 32-bit Sized Write             64 cyc         64 cyc       0 cyc         2.84 MB/s           2.84 MB/s    (2.71)    EXACT MATCH (100%)
-Chipmem 32-bit Read (No Pref)          64 cyc         64 cyc       0 cyc         4.73 MB/s           4.73 MB/s    (4.51)    EXACT MATCH (100%)
-Chipmem 32-bit Read (Prefetch)         64 cyc         65 cyc       1 cyc         4.73 MB/s           7.04 MB/s    (6.71)    +32.8% FASTER
-======================================================================================================================================
-```
-
-### Verification Highlights:
-1. **0.00% Write Regression ($\Delta = 0\text{ cycles}$):** Every write to Chip RAM and Custom Chipset completes in the exact same cycle count as upstream.
-2. **Read Parity:** Standard reads match cycle-for-cycle.
-3. **Speculative Prefetch Gain:** When prefetch is activated (`CONTROL_ENABLE_PREFETCH`), 32-bit sequential read throughput jumps from $4.73\text{ MB/s}$ to **$7.04\text{ MB/s}$** ($+32.8\%$ to $+48.8\%$ speedup).
-4. **Glitch Immunity:** Passed 100% under severe 1.8V edge ringing dips simulated by `ClockMode::RINGING_UNFIXED`.
+| Transaction | Upstream | Refactor | Cycle Delta | Throughput | Status |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| Chipmem 32-bit Write (2-slot) | 64 cyc | 64 cyc | 0 cyc | 7.03 MB/s (6.71 MiB/s) | Match |
+| Chipmem 16-bit Write | 64 cyc | 64 cyc | 0 cyc | 3.53 MB/s (3.36 MiB/s) | Match |
+| Chipmem 16-bit Read | 64 cyc | 64 cyc | 0 cyc | 2.58 MB/s (2.46 MiB/s) | Match |
+| Chipset 16-bit Write ($DFF180) | 64 cyc | 64 cyc | 0 cyc | 2.58 MB/s (2.46 MiB/s) | Match |
+| Chipset 16-bit Read ($DFF000) | 64 cyc | 64 cyc | 0 cyc | 2.58 MB/s (2.46 MiB/s) | Match |
+| Chipset 32-bit Write (Dynamic Sizing) | 64 cyc | 64 cyc | 0 cyc | 2.84 MB/s (2.71 MiB/s) | Match |
+| Chipmem 32-bit Read (no prefetch) | 64 cyc | 64 cyc | 0 cyc | 4.73 MB/s (4.51 MiB/s) | Match |
+| Chipmem 32-bit Read (prefetch ON) | 64 cyc | 65 cyc | +1 cyc | 7.04 MB/s (6.71 MiB/s) | +48.8% |
+| Glitch Filter Immunity (1.8V Ringing) | Fails | Pass | - | 100% stable | Verified |

@@ -1,165 +1,120 @@
-# Virtual Zorro-II AutoConfig & Wishbone B4 Architecture
+# Virtual Zorro-II & Wishbone Interconnect
 
-## 1. Executive Overview
-
-The **PiStorm32-lite** gateware features a hardware-emulated **Virtual Zorro-II AutoConfig PIC (Plug-in Card)** coupled to an internal **Wishbone B4 Crossbar Interconnect**.
-
-This subsystem enables the Amiga host CPU and the Raspberry Pi host to exchange data, trigger hardware interrupts, and control peripheral I/O at the FPGA's full $182\text{ MHz}$ internal clock speed without consuming a single cycle on the vintage Amiga motherboard bus.
-
-```
-       +-------------------------------------------------------------+
-       |                  AmigaOS expansion.library                  |
-       +------------------------------+------------------------------+
-                                      |
-                                      | AutoConfig Probing at $00E80000
-                                      v
-       +-------------------------------------------------------------+
-       |               Virtual Zorro-II AutoConfig PIC               |
-       |  - 64 KB Memory Space Assigned (Default: $00E90000)         |
-       |  - Zero Motherboard Bus Wait States                         |
-       |  - Complete Isolation from Alice / Custom Chipset           |
-       +------------------------------+------------------------------+
-                                      |
-                                      | Wishbone B4 Bus (182 MHz, 0-WS)
-                                      v
-       +-------------------------------------------------------------+
-       |                Wishbone Interconnect Crossbar               |
-       +-------+-----------------+-----------------+-----------------+
-               |                 |                 |                 |
-               v                 v                 v                 v
-        [ Slave 0 ]       [ Slave 1 ]       [ Slave 2 ]       [ Slave 3 ]
-        Scratchpad SRAM   SPI / Mailbox     ESP32 GPIO Matrix Interrupt Ctrl
-        ($0000-$0FFF)     ($1000-$10FF)     ($2000-$20FF)     ($3000-$30FF)
-        Fast Buffers      FIFO / Coproc     Atomic IO MUX     Amiga INT2 / 6
-```
+The gateware provides a virtual Zorro-II AutoConfig expansion device and an internal 32-bit Wishbone B4 crossbar running at 182 MHz with 0 wait states.
 
 ---
 
-## 2. AutoConfig Specification & Address Allocation
+## 1. AutoConfig Specification
 
-### 2.1 AutoConfig ROM Headers ($00E80000)
-When AmigaOS boots, the `expansion.library` queries memory space `$00E80000` to enumerate expansion boards. The PiStorm32-lite gateware synthesizes standard AutoConfig nibbles complying with the Commodore Amiga expansion specification:
+AmigaOS enumerates expansion boards at boot via `expansion.library` probing `$00E80000`. The gateware synthesizes standard AutoConfig ROM nibbles:
 
-- **Board Type:** Zorro-II Memory / I/O Expansion (`$E` in nibble 0).
-- **Size Code:** 64 KB (`$01` in size field).
-- **Manufacturer ID:** `$5053` ("PS" - PiStorm).
-- **Product ID:** `$01` (PiStorm32-lite Virtual Coprocessor).
-- **Serial Number:** `$00000001`.
-- **Base Address Register:** `$00E80048` / `$00E8004A`.
+- **Board Type:** Zorro-II Memory / I/O expansion (`$E` in nibble 0)
+- **Size:** 64 KB (`$01` in size field)
+- **Manufacturer ID:** 28020 (`$6D74`, registered PiStorm ID)
+- **Product ID:** `$32` (PiStorm32)
+- **Serial Number:** `$00000001`
+- **Base Address Register:** `$00E80048` / `$00E8004A`
 
-Once configured by `expansion.library`, the card maps its 64 KB address window to **`$00E90000`–`$00E9FFFF`** (or to any 64 KB aligned base address assigned by the operating system).
+Once configured by AmigaOS, the board relocates to its assigned 64 KB base address (typically `$00E90000`). Accesses to this 64 KB space are handled purely inside the FPGA and do not generate any motherboard bus cycles.
 
 ---
 
-## 3. Wishbone B4 Memory Map
+## 2. Memory Map (64 KB Window)
 
-All internal peripherals reside within the 64 KB configured window:
+Base address offsets (relative to configured base, e.g. `$00E90000`):
 
-| Address Offset | Size | Slave Module | Description |
+| Offset | Size | Slave | Function |
 | :--- | :---: | :--- | :--- |
-| `+$0000`–`+$0FFF` | 4 KB | **Slave 0: Scratchpad SRAM** | High-speed dual-port shared buffer for DMA / Mailbox packets |
-| `+$1000`–`+$101F` | 32 B | **Slave 1: SPI / Coproc FIFO** | High-speed SPI master & coprocessor mailbox registers |
-| `+$2000`–`+$20FF` | 256 B | **Slave 2: GPIO Matrix & IO MUX** | ESP32-style pin mapping, atomic SET/CLR/TOGGLE registers |
-| `+$3000`–`+$301F` | 32 B | **Slave 3: Interrupt Controller** | Amiga Level 2 (INT2) & Level 6 (INT6) interrupt generation |
-
-### 3.1 Bus Performance & Isolation
-- **Clock Frequency:** Full $182.0\text{ MHz}$ (`sys_clk`).
-- **Wait States:** **0 Wait States** (single-cycle ACK for all reads and writes).
-- **Throughput:** **$13.5\text{ MB/s}$** transfer rate ($3.54\text{ MOps/s}$) over the Pi host parallel interface.
-- **Motherboard Bus Isolation:** **100% Isolated.** Zero cycles on the Amiga motherboard bus / Alice; transfers occur purely within the FPGA silicon without loading the Amiga bus.
+| `+$0000`–`+$0FFF` | 4 KB | Slave 0: Scratchpad SRAM | Dual-ported RAM buffer (shared between Pi and Amiga) |
+| `+$1000`–`+$101F` | 32 B | Slave 1: SPI / Mailbox FIFO | SPI master and coprocessor message passing |
+| `+$2000`–`+$20FF` | 256 B | Slave 2: GPIO Matrix & IO MUX | Pin configuration and atomic bitwise registers |
+| `+$3000`–`+$301F` | 32 B | Slave 3: Interrupt Controller | Amiga Level 2 (INT2) and Level 6 (INT6) control |
 
 ---
 
-## 4. Peripheral Registers Reference
+## 3. Peripheral Registers
 
-### 4.1 Slave 0: Scratchpad SRAM (`+$0000`–`+$0FFF`)
-A 4 KB block of high-speed dual-ported SRAM accessible by both the Amiga 68020/68030/68040 and the Raspberry Pi host.
-- Supports 8-bit, 16-bit, and 32-bit atomic read/write accesses.
-- Ideal for zero-copy message ring buffers, disk sector caches, and network packet descriptors.
+### Slave 0: Scratchpad SRAM (`+$0000`–`+$0FFF`)
+4 KB dual-port SRAM accessible by both the Amiga CPU and Raspberry Pi with 0 wait states. Supports 8, 16, and 32-bit reads and writes.
 
-### 4.2 Slave 1: SPI / Coprocessor Mailbox (`+$1000`–`+$101F`)
+### Slave 1: SPI / Coprocessor Mailbox (`+$1000`–`+$101F`)
 
-| Offset | Register Name | R/W | Description |
+| Offset | Name | R/W | Description |
 | :---: | :--- | :---: | :--- |
-| `+$1000` | `COPROC_CTRL` | R/W | Bit 0: Enable, Bit 1: Reset FIFO, Bit 2: Loopback |
+| `+$1000` | `COPROC_CTRL` | R/W | Bit 0: Enable, Bit 1: FIFO Reset, Bit 2: Loopback |
 | `+$1004` | `COPROC_STATUS` | R | Bit 0: TX Empty, Bit 1: TX Full, Bit 2: RX Empty, Bit 3: RX Full |
-| `+$1008` | `COPROC_DATA_TX` | W | Push 32-bit word into transmit FIFO |
-| `+$100C` | `COPROC_DATA_RX` | R | Pop 32-bit word from receive FIFO |
+| `+$1008` | `COPROC_DATA_TX` | W | Write 32-bit word to TX FIFO |
+| `+$100C` | `COPROC_DATA_RX` | R | Read 32-bit word from RX FIFO |
 
-### 4.3 Slave 2: ESP32-Style GPIO Matrix & IO MUX (`+$2000`–`+$20FF`)
-Provides flexible software-defined pin routing and atomic bit manipulation matching the ESP32 GPIO architecture:
+### Slave 2: GPIO Matrix & IO MUX (`+$2000`–`+$20FF`)
 
-| Offset | Register Name | R/W | Bit Description |
+Supports direct pin control and atomic bit operations:
+
+| Offset | Name | R/W | Description |
 | :---: | :--- | :---: | :--- |
-| `+$2000` | `GPIO_OUT_REG` | R/W | Output state of GPIO pins [31:0] |
-| `+$2004` | `GPIO_OUT_W1TS` | W | **Write-1-to-Set:** Bits written as 1 set output high; 0 has no effect |
-| `+$2008` | `GPIO_OUT_W1TC` | W | **Write-1-to-Clear:** Bits written as 1 clear output low; 0 has no effect |
-| `+$200C` | `GPIO_OUT_W1TT` | W | **Write-1-to-Toggle:** Bits written as 1 invert output state |
-| `+$2010` | `GPIO_IN_REG` | R | Real-time input state of physical pins [31:0] |
-| `+$2014` | `GPIO_ENABLE_REG` | R/W | Direction control (1 = Output, 0 = Input) |
-| `+$2018` | `GPIO_ENABLE_W1TS` | W | **Write-1-to-Set Direction:** Atomically sets pins to Output |
-| `+$201C` | `GPIO_ENABLE_W1TC` | W | **Write-1-to-Clear Direction:** Atomically sets pins to Input |
-| `+$2040`+ | `GPIO_FUNC_IN_SEL_n` | R/W | Maps physical pin `n` to internal peripheral signal |
-| `+$2080`+ | `GPIO_FUNC_OUT_SEL_n`| R/W | Maps internal peripheral signal to physical pin `n` (Bit 8: Invert) |
+| `+$2000` | `GPIO_OUT_REG` | R/W | Output register [31:0] |
+| `+$2004` | `GPIO_OUT_W1TS` | W | **Write-1-to-Set:** 1 sets bit to high; 0 has no effect |
+| `+$2008` | `GPIO_OUT_W1TC` | W | **Write-1-to-Clear:** 1 clears bit to low; 0 has no effect |
+| `+$200C` | `GPIO_OUT_W1TT` | W | **Write-1-to-Toggle:** 1 inverts bit state; 0 has no effect |
+| `+$2010` | `GPIO_IN_REG` | R | Input pin state [31:0] |
+| `+$2014` | `GPIO_ENABLE_REG` | R/W | Direction (1 = Output, 0 = Input) |
+| `+$2018` | `GPIO_ENABLE_W1TS` | W | Set pins to Output atomically |
+| `+$201C` | `GPIO_ENABLE_W1TC` | W | Set pins to Input atomically |
+| `+$2040`+ | `GPIO_FUNC_IN_SEL_n` | R/W | Route pin `n` to internal peripheral input |
+| `+$2080`+ | `GPIO_FUNC_OUT_SEL_n`| R/W | Route internal peripheral to pin `n` (Bit 8: Invert) |
 
-#### Atomic Bit Operations Advantage:
-Eliminates read-modify-write race conditions in multi-threaded OS environments (e.g., AmigaOS Exec multitasking or Pi Linux background services). Software never needs to disable interrupts (`Disable()`/`Enable()`) just to toggle an I/O line.
+Atomic W1TS/W1TC/W1TT writes avoid read-modify-write race conditions in multitasking environments without needing to disable interrupts.
 
-### 4.4 Slave 3: Amiga Interrupt Controller (`+$3000`–`+$301F`)
-Allows hardware and software on the Pi host or FPGA peripherals to signal the Amiga CPU directly.
+### Slave 3: Interrupt Controller (`+$3000`–`+$301F`)
 
-| Offset | Register Name | R/W | Description |
+| Offset | Name | R/W | Description |
 | :---: | :--- | :---: | :--- |
-| `+$3000` | `IRQ_STATUS` | R | Bit 0: INT2 Pending, Bit 1: INT6 Pending |
-| `+$3004` | `IRQ_ASSERT` | W | Write 1 to Bit 0 asserts **INT2**; Write 1 to Bit 1 asserts **INT6** |
-| `+$3008` | `IRQ_CLEAR` | W | Write 1 to Bit 0/1 acknowledges and clears the respective IRQ |
-| `+$300C` | `IRQ_MASK` | R/W | Bit 0/1: Enable/mask interrupt propagation to Amiga `_IPL[2:0]` |
+| `+$3000` | `IRQ_STATUS` | R | Bit 0: INT2 pending, Bit 1: INT6 pending |
+| `+$3004` | `IRQ_ASSERT` | W | Bit 0: assert INT2, Bit 1: assert INT6 |
+| `+$3008` | `IRQ_CLEAR` | W | Bit 0: clear INT2, Bit 1: clear INT6 |
+| `+$300C` | `IRQ_MASK` | R/W | Bit 0: enable INT2, Bit 1: enable INT6 |
 
-- **INT2 (Level 2 Interrupt):** Connected to Amiga `_IPL` lines prioritizing fast I/O, network driver packet arrival, and coprocessor mailbox requests. Handled via standard AmigaOS `AddIntServer(INTB_PORTS, ...)`.
-- **INT6 (Level 6 Interrupt):** Highest non-maskable peripheral level; used for urgent real-time timing and fault signaling.
+- **INT2:** Triggers Amiga Level 2 interrupt (Paula, ports/audio). Handled in AmigaOS via `AddIntServer(INTB_PORTS, ...)`.
+- **INT6:** Triggers Amiga Level 6 interrupt (CIA-B).
 
 ---
 
-## 5. AmigaOS Driver Implementation Guide
+## 4. AmigaOS Driver Example
 
-### 5.1 AutoConfig Card Enumeration
-In AmigaOS C (using `exec/types.h` and `libraries/configvars.h`):
-
+### Finding the Card
 ```c
 #include <proto/exec.h>
 #include <proto/expansion.h>
 #include <libraries/configvars.h>
 
-#define PISTORM_MANUFACTURER_ID 0x5053
-#define PISTORM_PRODUCT_ID      0x01
+#define PISTORM_MANUF_ID 28020
+#define PISTORM_PROD_ID  0x32
 
-struct ConfigDev* cd = NULL;
-ULONG* zorro_base = NULL;
+struct ConfigDev* cd;
+volatile ULONG* zorro_base = NULL;
 
 if ((ExpansionBase = (struct ExpansionBase*)OpenLibrary("expansion.library", 36))) {
-    cd = FindConfigDev(NULL, PISTORM_MANUFACTURER_ID, PISTORM_PRODUCT_ID);
+    cd = FindConfigDev(NULL, PISTORM_MANUF_ID, PISTORM_PROD_ID);
     if (cd) {
-        zorro_base = (ULONG*)cd->cd_BoardAddr;
-        printf("PiStorm32-lite Virtual Zorro card found at: 0x%08lx\n", (ULONG)zorro_base);
+        zorro_base = (volatile ULONG*)cd->cd_BoardAddr;
     }
     CloseLibrary((struct Library*)ExpansionBase);
 }
 ```
 
-### 5.2 Atomic Pin Toggling Example
+### Atomic Pin Toggling
 ```c
-volatile ULONG* gpio_base = (volatile ULONG*)((UBYTE*)zorro_base + 0x2000);
-#define GPIO_OUT_W1TT (*(volatile ULONG*)((UBYTE*)gpio_base + 0x000C))
-#define GPIO_ENABLE_W1TS (*(volatile ULONG*)((UBYTE*)gpio_base + 0x0018))
+#define GPIO_OUT_W1TT     (*(volatile ULONG*)((UBYTE*)zorro_base + 0x200C))
+#define GPIO_ENABLE_W1TS  (*(volatile ULONG*)((UBYTE*)zorro_base + 0x2018))
 
-// Configure Pin 4 as output
+// Set pin 4 as output
 GPIO_ENABLE_W1TS = (1 << 4);
 
-// Atomically toggle Pin 4 (zero wait-states, zero bus cycles)
+// Toggle pin 4 without read-modify-write
 GPIO_OUT_W1TT = (1 << 4);
 ```
 
-### 5.3 Installing an INT2 Interrupt Server
+### Installing an INT2 Handler
 ```c
 #include <hardware/intbits.h>
 
@@ -170,14 +125,14 @@ BOOL PistormIntHandler(void) {
     ULONG status = irq_base[0]; // Read IRQ_STATUS
 
     if (status & 0x01) {
-        // Handle packet / event from Pi host
-        ProcessPiMailbox();
+        // Handle event from Pi host
+        ProcessEvent();
 
-        // Acknowledge and clear INT2
+        // Clear INT2
         irq_base[2] = 0x01; // Write IRQ_CLEAR
         return TRUE;
     }
-    return FALSE; // Not our interrupt
+    return FALSE;
 }
 
 void InstallDriver(void) {

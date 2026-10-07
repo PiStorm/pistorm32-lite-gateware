@@ -1,14 +1,8 @@
 /*
- * PiStorm32-lite Gateware
+ * PiStorm32-lite Gateware - Raspberry Pi Host Interface
  *
  * Copyright 2022 Niklas Ekström
- * Copyright 2022 Claude Schwarz
- *
- * 2026 Claude Schwarz Refactor:
- *   - Raspberry Pi 16-Bit Parallel GPIO Interface
- *   - Dual Request-Slot Queue (Pipelined Asynchronous Handshake)
- *   - Precalculated Zorro-II AutoConfig / IO Internal Intercept Logic
- *   - Keyboard Reset Filtering & Synchronized Amiga Interrupt Routing
+ * Copyright 2022-2026 Claude Schwarz
  */
 
 module pi_interface (

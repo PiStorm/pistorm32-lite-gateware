@@ -2,32 +2,7 @@
  * PiStorm32-lite Gateware
  *
  * Copyright 2022 Niklas Ekström
- * Copyright 2022 Claude Schwarz
- *
- * 2026 Claude Schwarz Refactor:
- *   - Modular 3-block architecture (pi_interface, m68k_interface, zorro_device)
- *   - Speculative 32-bit read prefetch engine with local hit cache
- *   - Virtual Zorro-II AutoConfig 64KB I/O device (Manufacturer 28020, Product 0x32)
- *   - Complete static timing closure (fmax >= 182 MHz on Efinix Trion T20)
- *
- * Architecture Overview:
- *
- *                     +---------------------------------------+
- *                     |               PS32-lite               |
- *                     |          (Top-Level Wrapper)          |
- *                     +---------------------------------------+
- *                                    /    |    \
- *                                   /     |     \
- *         +-----------------------+       |       +-------------------------+
- *         |     pi_interface      |       |       |     m68k_interface      |
- *         |  (Raspberry Pi GPIOs  |       |       |  (68020 Bus Master FSM, |
- *         |   & Request Buffers)  |       |       |   DA-Mux, Clock-Filter) |
- *         +-----------------------+       |       +-------------------------+
- *                     \                   |                   /
- *                      \  +------------------------------+   /
- *                       --|         zorro_device         |--
- *                         | (AutoConfig ROM & 64KB I/O)  |
- *                         +------------------------------+
+ * Copyright 2022-2026 Claude Schwarz
  */
 
 module pistorm (

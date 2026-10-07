@@ -441,7 +441,7 @@ void run_golden_reference_comparison() {
         TEST_ASSERT(r_cyc == g_cyc, "Chipset 32-bit Sized Write: Bus cycles match Golden Reference exactly (64 vs 64)");
         TEST_ASSERT(std::abs(r_time - g_time) < 10.0, "Chipset 32-bit Sized Write: Execution time matches Golden Reference (0% regression)");
 
-        rows.push_back({"Chipset 32-bit Sized Write", g_cyc, r_cyc, g_time, r_time, 32, 4, "Zero Regression (Prio #2)"});
+        rows.push_back({"Chipset 32-bit Sized Write", g_cyc, r_cyc, g_time, r_time, 32, 4, "Exact Match"});
     }
 
     // --- Benchmark 5: Chipmem 32-bit Sequential Read (No Prefetch) ---
@@ -473,7 +473,7 @@ void run_golden_reference_comparison() {
         TEST_ASSERT(r_cyc == g_cyc, "Chipmem 32-bit Read (No Prefetch): Bus cycles match Golden Reference exactly (64 vs 64)");
         TEST_ASSERT(std::abs(r_time - g_time) < 75.0, "Chipmem 32-bit Read (No Prefetch): Execution time matches Golden Reference (0% regression)");
 
-        rows.push_back({"Chipmem 32-bit Read (No Pref)", g_cyc, r_cyc, g_time, r_time, 64, 4, "Zero Regression (Prio #2)"});
+        rows.push_back({"Chipmem 32-bit Read (No Pref)", g_cyc, r_cyc, g_time, r_time, 64, 4, "Exact Match"});
     }
 
     // --- Benchmark 6: Chipmem 32-bit Sequential Read (Prefetch ON) ---
@@ -506,11 +506,11 @@ void run_golden_reference_comparison() {
 
         TEST_ASSERT(r_time < g_time, "Chipmem 32-bit Read (Prefetch ON): Refactor delivers higher throughput than Golden Reference");
 
-        rows.push_back({"Chipmem 32-bit Read (Prefetch)", g_cyc, r_cyc, g_time, r_time, 64, 4, "Prefetch Speedup (Prio #3)"});
+        rows.push_back({"Chipmem 32-bit Read (Prefetch)", g_cyc, r_cyc, g_time, r_time, 64, 4, "Prefetch Active"});
         refactor_harness.pi()->ps_clr_control(CONTROL_ENABLE_PREFETCH);
     }
 
-    // --- Test 7: Motherboard Clock Glitch / Ringing Dip Immunity (Priority #1) ---
+    // --- Test 7: 1.8V Clock Ringing Immunity ---
     {
         std::cout << ANSI_CYAN "\n  [Glitch Immunity] Testing 1.8V Ringing Dip Immunity (Unmodified A1200 Motherboard Clock)..." ANSI_RESET << std::endl;
         refactor_harness.set_clock_mode(ClockMode::RINGING_UNFIXED);
@@ -521,14 +521,14 @@ void run_golden_reference_comparison() {
         refactor_harness.run_mc_cycles(4);
         uint32_t rd_val = refactor_harness.pi()->ps32_read_32(ring_addr);
 
-        TEST_ASSERT(rd_val == 0x12345678, "Glitch Filter Immunity: Refactor passes 100% reliably under severe 1.8V edge ringing dips (Prio #1)");
+        TEST_ASSERT(rd_val == 0x12345678, "Glitch Filter: Passes under 1.8V clock ringing dips");
         refactor_harness.set_clock_mode(ClockMode::CLEAN);
     }
 
     // Print the Side-by-Side Comparison Table
     std::cout << "\n" ANSI_BOLD ANSI_CYAN
               << "======================================================================================================================================\n"
-              << "                      PiStorm32-lite: Upstream Golden Reference vs Enhanced Modular Refactor\n"
+              << "                      PiStorm32-lite: Upstream Golden Reference vs Modular Refactor\n"
               << "======================================================================================================================================\n"
               << ANSI_RESET;
     std::cout << ANSI_BOLD
