@@ -1,16 +1,21 @@
 #include "ps_pi_model.h"
 #include "Vpistorm.h"
+#include "Vpistorm_golden.h"
+#include "Vpistorm.h"
 #include <iostream>
 
-PiStormPiModel::PiStormPiModel(Vpistorm* dut, TickFunc tick_fn)
+template <typename TDut>
+PiStormPiModelT<TDut>::PiStormPiModelT(TDut* dut, TickFunc tick_fn)
     : dut_(dut), tick_(tick_fn)
 {
     init();
 }
 
-PiStormPiModel::~PiStormPiModel() = default;
+template <typename TDut>
+PiStormPiModelT<TDut>::~PiStormPiModelT() = default;
 
-void PiStormPiModel::init() {
+template <typename TDut>
+void PiStormPiModelT<TDut>::init() {
     dut_->PI_RD = 1;
     dut_->PI_WR = 1;
     dut_->PI_A = 0;
@@ -24,7 +29,8 @@ void PiStormPiModel::init() {
     write_pending_1s_ = 0;
 }
 
-void PiStormPiModel::write_ps_reg(uint32_t address, uint16_t data) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::write_ps_reg(uint32_t address, uint16_t data) {
     dut_->PI_A = address & 7;
     dut_->PI_D_IN = data;
     dut_->PI_WR = 1;
@@ -38,7 +44,8 @@ void PiStormPiModel::write_ps_reg(uint32_t address, uint16_t data) {
     tick_(2);
 }
 
-uint16_t PiStormPiModel::read_ps_reg(uint32_t address) {
+template <typename TDut>
+uint16_t PiStormPiModelT<TDut>::read_ps_reg(uint32_t address) {
     dut_->PI_A = address & 7;
     dut_->PI_RD = 1;
     dut_->PI_WR = 1;
@@ -56,7 +63,8 @@ uint16_t PiStormPiModel::read_ps_reg(uint32_t address) {
     return data;
 }
 
-bool PiStormPiModel::wait_txn(int timeout_cycles) {
+template <typename TDut>
+bool PiStormPiModelT<TDut>::wait_txn(int timeout_cycles) {
     int count = 0;
     while (dut_->PI_TXN_IN_PROGRESS && count < timeout_cycles) {
         tick_(2);
@@ -65,19 +73,23 @@ bool PiStormPiModel::wait_txn(int timeout_cycles) {
     return (count < timeout_cycles);
 }
 
-void PiStormPiModel::ps_set_control(uint16_t value) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::ps_set_control(uint16_t value) {
     write_ps_reg(REG_CONTROL, 0x8000 | (value & 0x7FFF));
 }
 
-void PiStormPiModel::ps_clr_control(uint16_t value) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::ps_clr_control(uint16_t value) {
     write_ps_reg(REG_CONTROL, value & 0x7FFF);
 }
 
-uint16_t PiStormPiModel::read_status() {
+template <typename TDut>
+uint16_t PiStormPiModelT<TDut>::read_status() {
     return read_ps_reg(REG_STATUS);
 }
 
-void PiStormPiModel::set_use_2slot(bool enable) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::set_use_2slot(bool enable) {
     use_2slot_ = enable;
     if (use_2slot_) {
         ps_clr_control(CONTROL_INC_EXEC_SLOT);
@@ -93,7 +105,8 @@ void PiStormPiModel::set_use_2slot(bool enable) {
     }
 }
 
-void PiStormPiModel::flush_pending_writes() {
+template <typename TDut>
+void PiStormPiModelT<TDut>::flush_pending_writes() {
     if (use_2slot_) {
         for (int s = 0; s < 2; s++) {
             if (slot_active_[s]) {
@@ -110,14 +123,16 @@ void PiStormPiModel::flush_pending_writes() {
     }
 }
 
-void PiStormPiModel::set_serial(bool dat, bool clk) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::set_serial(bool dat, bool clk) {
     dut_->PI_SER_DAT = dat ? 1 : 0;
     dut_->PI_SER_CLK = clk ? 1 : 0;
     tick_(1);
 }
 
 // Single-slot read (fallback / legacy mode)
-uint32_t PiStormPiModel::ps32_do_read_access_1s(uint32_t address, uint32_t size, uint8_t fc) {
+template <typename TDut>
+uint32_t PiStormPiModelT<TDut>::ps32_do_read_access_1s(uint32_t address, uint32_t size, uint8_t fc) {
     write_ps_reg(REG_ADDR_LO, address & 0xFFFF);
     if (write_pending_1s_) wait_txn();
 
@@ -137,7 +152,8 @@ uint32_t PiStormPiModel::ps32_do_read_access_1s(uint32_t address, uint32_t size,
 }
 
 // 2-slot read (pipelined mode)
-uint32_t PiStormPiModel::ps32_do_read_access_2s(uint32_t address, uint32_t size, uint8_t fc) {
+template <typename TDut>
+uint32_t PiStormPiModelT<TDut>::ps32_do_read_access_2s(uint32_t address, uint32_t size, uint8_t fc) {
     write_ps_reg(REG_SLOT, next_slot_);
     if (slot_active_[next_slot_]) {
         wait_txn();
@@ -162,7 +178,8 @@ uint32_t PiStormPiModel::ps32_do_read_access_2s(uint32_t address, uint32_t size,
 }
 
 // Single-slot write
-void PiStormPiModel::ps32_do_write_access_1s(uint32_t address, uint32_t data, uint32_t size, uint8_t fc) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::ps32_do_write_access_1s(uint32_t address, uint32_t data, uint32_t size, uint8_t fc) {
     write_ps_reg(REG_DATA_LO, data & 0xFFFF);
     if (size == SIZE_LONG) {
         write_ps_reg(REG_DATA_HI, (data >> 16) & 0xFFFF);
@@ -182,7 +199,8 @@ void PiStormPiModel::ps32_do_write_access_1s(uint32_t address, uint32_t data, ui
 }
 
 // 2-slot write
-void PiStormPiModel::ps32_do_write_access_2s(uint32_t address, uint32_t data, uint32_t size, uint8_t fc) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::ps32_do_write_access_2s(uint32_t address, uint32_t data, uint32_t size, uint8_t fc) {
     write_ps_reg(REG_SLOT, next_slot_);
     if (slot_active_[next_slot_]) {
         wait_txn();
@@ -206,22 +224,26 @@ void PiStormPiModel::ps32_do_write_access_2s(uint32_t address, uint32_t data, ui
     next_slot_ = (next_slot_ + 1) & 1;
 }
 
-uint8_t PiStormPiModel::ps32_read_8(uint32_t address, uint8_t fc) {
+template <typename TDut>
+uint8_t PiStormPiModelT<TDut>::ps32_read_8(uint32_t address, uint8_t fc) {
     return use_2slot_ ? ps32_do_read_access_2s(address, SIZE_BYTE, fc)
                       : ps32_do_read_access_1s(address, SIZE_BYTE, fc);
 }
 
-uint16_t PiStormPiModel::ps32_read_16(uint32_t address, uint8_t fc) {
+template <typename TDut>
+uint16_t PiStormPiModelT<TDut>::ps32_read_16(uint32_t address, uint8_t fc) {
     return use_2slot_ ? ps32_do_read_access_2s(address, SIZE_WORD, fc)
                       : ps32_do_read_access_1s(address, SIZE_WORD, fc);
 }
 
-uint32_t PiStormPiModel::ps32_read_32(uint32_t address, uint8_t fc) {
+template <typename TDut>
+uint32_t PiStormPiModelT<TDut>::ps32_read_32(uint32_t address, uint8_t fc) {
     return use_2slot_ ? ps32_do_read_access_2s(address, SIZE_LONG, fc)
                       : ps32_do_read_access_1s(address, SIZE_LONG, fc);
 }
 
-uint64_t PiStormPiModel::ps32_read_64(uint32_t address, uint8_t fc) {
+template <typename TDut>
+uint64_t PiStormPiModelT<TDut>::ps32_read_64(uint32_t address, uint8_t fc) {
     if (use_2slot_) {
         // Pipelined 64-bit read across both slots
         write_ps_reg(REG_SLOT, next_slot_);
@@ -258,7 +280,8 @@ uint64_t PiStormPiModel::ps32_read_64(uint32_t address, uint8_t fc) {
     }
 }
 
-uint128_t PiStormPiModel::ps32_read_128(uint32_t address, uint8_t fc) {
+template <typename TDut>
+uint128_t PiStormPiModelT<TDut>::ps32_read_128(uint32_t address, uint8_t fc) {
     uint128_t res;
     if (use_2slot_) {
         // First 64-bit chunk
@@ -274,7 +297,8 @@ uint128_t PiStormPiModel::ps32_read_128(uint32_t address, uint8_t fc) {
     return res;
 }
 
-void PiStormPiModel::ps32_write_8(uint32_t address, uint8_t data, uint8_t fc) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::ps32_write_8(uint32_t address, uint8_t data, uint8_t fc) {
     if (use_2slot_) {
         ps32_do_write_access_2s(address, data, SIZE_BYTE, fc);
     } else {
@@ -282,7 +306,8 @@ void PiStormPiModel::ps32_write_8(uint32_t address, uint8_t data, uint8_t fc) {
     }
 }
 
-void PiStormPiModel::ps32_write_16(uint32_t address, uint16_t data, uint8_t fc) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::ps32_write_16(uint32_t address, uint16_t data, uint8_t fc) {
     if (use_2slot_) {
         ps32_do_write_access_2s(address, data, SIZE_WORD, fc);
     } else {
@@ -290,7 +315,8 @@ void PiStormPiModel::ps32_write_16(uint32_t address, uint16_t data, uint8_t fc) 
     }
 }
 
-void PiStormPiModel::ps32_write_32(uint32_t address, uint32_t data, uint8_t fc) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::ps32_write_32(uint32_t address, uint32_t data, uint8_t fc) {
     if (use_2slot_) {
         ps32_do_write_access_2s(address, data, SIZE_LONG, fc);
     } else {
@@ -298,7 +324,8 @@ void PiStormPiModel::ps32_write_32(uint32_t address, uint32_t data, uint8_t fc) 
     }
 }
 
-void PiStormPiModel::ps32_write_64(uint32_t address, uint64_t data, uint8_t fc) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::ps32_write_64(uint32_t address, uint64_t data, uint8_t fc) {
     if (use_2slot_) {
         // First long word
         write_ps_reg(REG_SLOT, next_slot_);
@@ -335,7 +362,12 @@ void PiStormPiModel::ps32_write_64(uint32_t address, uint64_t data, uint8_t fc) 
     }
 }
 
-void PiStormPiModel::ps32_write_128(uint32_t address, uint128_t data, uint8_t fc) {
+template <typename TDut>
+void PiStormPiModelT<TDut>::ps32_write_128(uint32_t address, uint128_t data, uint8_t fc) {
     ps32_write_64(address, data.hi, fc);
     ps32_write_64(address + 8, data.lo, fc);
 }
+
+// Explicit template instantiations
+template class PiStormPiModelT<Vpistorm>;
+template class PiStormPiModelT<Vpistorm_golden>;

@@ -1,9 +1,11 @@
 #include "amiga_bus_model.h"
 #include "Vpistorm.h"
+#include "Vpistorm_golden.h"
 #include <iostream>
 #include <iomanip>
 
-AmigaBusModel::AmigaBusModel(Vpistorm* dut, M68kSpeedGrade grade)
+template <typename TDut>
+AmigaBusModelT<TDut>::AmigaBusModelT(TDut* dut, M68kSpeedGrade grade)
     : dut_(dut)
 {
     timing_checker_ = std::make_unique<M68kTimingChecker>(M68kTimingProfile::get(grade));
@@ -22,13 +24,16 @@ AmigaBusModel::AmigaBusModel(Vpistorm* dut, M68kSpeedGrade grade)
     reset();
 }
 
-AmigaBusModel::~AmigaBusModel() = default;
+template <typename TDut>
+AmigaBusModelT<TDut>::~AmigaBusModelT() = default;
 
-void AmigaBusModel::set_timing_profile(const M68kTimingProfile& profile) {
+template <typename TDut>
+void AmigaBusModelT<TDut>::set_timing_profile(const M68kTimingProfile& profile) {
     timing_checker_->set_profile(profile);
 }
 
-void AmigaBusModel::reset() {
+template <typename TDut>
+void AmigaBusModelT<TDut>::reset() {
     latched_da_ = 0;
     latched_address_ = 0;
     prev_addr_le_ = false;
@@ -67,11 +72,13 @@ void AmigaBusModel::reset() {
     dut_->SPARE_IN = 0;
 }
 
-void AmigaBusModel::set_port_width_region(uint32_t start, uint32_t size, PortWidth pw) {
+template <typename TDut>
+void AmigaBusModelT<TDut>::set_port_width_region(uint32_t start, uint32_t size, PortWidth pw) {
     regions_.push_back({start, size, pw});
 }
 
-PortWidth AmigaBusModel::get_port_width(uint32_t addr) const {
+template <typename TDut>
+PortWidth AmigaBusModelT<TDut>::get_port_width(uint32_t addr) const {
     for (const auto& reg : regions_) {
         if (addr >= reg.start && addr < (reg.start + reg.size)) {
             return reg.port_width;
@@ -80,7 +87,8 @@ PortWidth AmigaBusModel::get_port_width(uint32_t addr) const {
     return default_port_width_;
 }
 
-uint32_t AmigaBusModel::descramble_da_address(uint32_t da) {
+template <typename TDut>
+uint32_t AmigaBusModelT<TDut>::descramble_da_address(uint32_t da) {
     uint32_t addr = 0;
     if (da & (1u << 1))  addr |= (1u << 0);
     if (da & (1u << 0))  addr |= (1u << 1);
@@ -117,7 +125,8 @@ uint32_t AmigaBusModel::descramble_da_address(uint32_t da) {
     return addr;
 }
 
-uint32_t AmigaBusModel::scramble_address(uint32_t addr) {
+template <typename TDut>
+uint32_t AmigaBusModelT<TDut>::scramble_address(uint32_t addr) {
     uint32_t da = 0;
     if (addr & (1u << 0))  da |= (1u << 1);
     if (addr & (1u << 1))  da |= (1u << 0);
@@ -154,16 +163,19 @@ uint32_t AmigaBusModel::scramble_address(uint32_t addr) {
     return da;
 }
 
-uint8_t AmigaBusModel::mem_read_8(uint32_t addr) {
+template <typename TDut>
+uint8_t AmigaBusModelT<TDut>::mem_read_8(uint32_t addr) {
     return ram_[addr % ram_.size()];
 }
 
-uint16_t AmigaBusModel::mem_read_16(uint32_t addr) {
+template <typename TDut>
+uint16_t AmigaBusModelT<TDut>::mem_read_16(uint32_t addr) {
     uint32_t a = addr % ram_.size();
     return (uint16_t(ram_[a]) << 8) | uint16_t(ram_[(a + 1) % ram_.size()]);
 }
 
-uint32_t AmigaBusModel::mem_read_32(uint32_t addr) {
+template <typename TDut>
+uint32_t AmigaBusModelT<TDut>::mem_read_32(uint32_t addr) {
     uint32_t a = addr % ram_.size();
     return (uint32_t(ram_[a]) << 24) |
            (uint32_t(ram_[(a + 1) % ram_.size()]) << 16) |
@@ -171,17 +183,20 @@ uint32_t AmigaBusModel::mem_read_32(uint32_t addr) {
            uint32_t(ram_[(a + 3) % ram_.size()]);
 }
 
-void AmigaBusModel::mem_write_8(uint32_t addr, uint8_t val) {
+template <typename TDut>
+void AmigaBusModelT<TDut>::mem_write_8(uint32_t addr, uint8_t val) {
     ram_[addr % ram_.size()] = val;
 }
 
-void AmigaBusModel::mem_write_16(uint32_t addr, uint16_t val) {
+template <typename TDut>
+void AmigaBusModelT<TDut>::mem_write_16(uint32_t addr, uint16_t val) {
     uint32_t a = addr % ram_.size();
     ram_[a] = (val >> 8) & 0xFF;
     ram_[(a + 1) % ram_.size()] = val & 0xFF;
 }
 
-void AmigaBusModel::mem_write_32(uint32_t addr, uint32_t val) {
+template <typename TDut>
+void AmigaBusModelT<TDut>::mem_write_32(uint32_t addr, uint32_t val) {
     uint32_t a = addr % ram_.size();
     ram_[a] = (val >> 24) & 0xFF;
     ram_[(a + 1) % ram_.size()] = (val >> 16) & 0xFF;
@@ -189,25 +204,30 @@ void AmigaBusModel::mem_write_32(uint32_t addr, uint32_t val) {
     ram_[(a + 3) % ram_.size()] = val & 0xFF;
 }
 
-void AmigaBusModel::set_ipl(uint8_t level) {
+template <typename TDut>
+void AmigaBusModelT<TDut>::set_ipl(uint8_t level) {
     uint8_t l = level & 7;
     // MC_IPL_n is active low: 0 -> 111, 7 -> 000
     dut_->MC_IPL_n = (~l) & 7;
 }
 
-void AmigaBusModel::set_external_reset(bool active) {
+template <typename TDut>
+void AmigaBusModelT<TDut>::set_external_reset(bool active) {
     dut_->MC_RESET_n_IN = active ? 0 : 1;
 }
 
-void AmigaBusModel::set_external_halt(bool active) {
+template <typename TDut>
+void AmigaBusModelT<TDut>::set_external_halt(bool active) {
     dut_->MC_HALT_n_IN = active ? 0 : 1;
 }
 
-void AmigaBusModel::set_kbreset(bool active) {
+template <typename TDut>
+void AmigaBusModelT<TDut>::set_kbreset(bool active) {
     dut_->KBRESET = active ? 0 : 1; // active-low: 0 when pressed
 }
 
-void AmigaBusModel::update_on_pll_clock(double now_ns) {
+template <typename TDut>
+void AmigaBusModelT<TDut>::update_on_pll_clock(double now_ns) {
     // Monitor open-drain outputs driven by DUT
     if (dut_->MC_RESET_n_OE) reset_driven_ = true;
     if (dut_->MC_HALT_n_OE)  halt_driven_ = true;
@@ -277,7 +297,8 @@ void AmigaBusModel::update_on_pll_clock(double now_ns) {
     }
 }
 
-void AmigaBusModel::update_on_mc_clk_edge(bool rising, double now_ns) {
+template <typename TDut>
+void AmigaBusModelT<TDut>::update_on_mc_clk_edge(bool rising, double now_ns) {
     if (timing_checker_) {
         timing_checker_->on_clk_edge(rising, now_ns);
     }
@@ -396,3 +417,7 @@ void AmigaBusModel::update_on_mc_clk_edge(bool rising, double now_ns) {
         dut_->DA_IN = 0;
     }
 }
+
+// Explicit template instantiations
+template class AmigaBusModelT<Vpistorm>;
+template class AmigaBusModelT<Vpistorm_golden>;

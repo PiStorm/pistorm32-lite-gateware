@@ -11,8 +11,9 @@
 #include "pcb_components.h"
 #include <memory>
 
-// Forward declaration of Verilated DUT
+// Forward declaration of Verilated DUTs
 class Vpistorm;
+class Vpistorm_golden;
 
 enum class PortWidth {
     PORT_32BIT = 0, // DSACK_n = 2'b00
@@ -20,10 +21,11 @@ enum class PortWidth {
     PORT_8BIT  = 2  // DSACK_n = 2'b10
 };
 
-class AmigaBusModel {
+template <typename TDut = Vpistorm>
+class AmigaBusModelT {
 public:
-    explicit AmigaBusModel(Vpistorm* dut, M68kSpeedGrade grade = M68kSpeedGrade::GRADE_A1200_14MHZ);
-    ~AmigaBusModel();
+    explicit AmigaBusModelT(TDut* dut, M68kSpeedGrade grade = M68kSpeedGrade::GRADE_A1200_14MHZ);
+    ~AmigaBusModelT();
 
     void reset();
 
@@ -84,7 +86,7 @@ private:
 
     PortWidth get_port_width(uint32_t addr) const;
 
-    Vpistorm* dut_;
+    TDut* dut_;
 
     std::vector<uint8_t> ram_;
     std::vector<MemoryRegion> regions_;
@@ -128,5 +130,8 @@ private:
     PcbLatch74LVC573A pcb_latch_;
     PcbSwitch74CBTD3384 pcb_data_switch_;
 };
+
+using AmigaBusModel = AmigaBusModelT<Vpistorm>;
+using AmigaBusModelGolden = AmigaBusModelT<Vpistorm_golden>;
 
 #endif // AMIGA_BUS_MODEL_H

@@ -219,9 +219,8 @@ module m68k_interface (
             if (ipl_sync[0] == ipl_sync[1])
                 ipl <= ipl_sync[0];
 
-            // Sample read data from DA bus during S4/S5 phases
-            if (state[STATE_BIT_S4_NOP] || state[STATE_BIT_WAIT_LATCH_DATA])
-                mc_data_read <= DA_IN;
+            // Sample read data from DA bus on every falling clock edge (exact upstream behavior)
+            mc_data_read <= DA_IN;
 
             mc_dsack_n_sync <= MC_DSACK_n;
             mc_berr_n_sync  <= MC_BERR_n;

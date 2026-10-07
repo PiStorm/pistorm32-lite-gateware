@@ -5,6 +5,7 @@
 #include <functional>
 
 class Vpistorm;
+class Vpistorm_golden;
 
 struct uint128_t {
     uint64_t hi;
@@ -51,12 +52,13 @@ struct uint128_t {
 #define TXN_READ  (1 << TXN_RW_SHIFT)
 #define TXN_WRITE (0 << TXN_RW_SHIFT)
 
-class PiStormPiModel {
+template <typename TDut = Vpistorm>
+class PiStormPiModelT {
 public:
     using TickFunc = std::function<void(int cycles)>;
 
-    PiStormPiModel(Vpistorm* dut, TickFunc tick_fn);
-    ~PiStormPiModel();
+    PiStormPiModelT(TDut* dut, TickFunc tick_fn);
+    ~PiStormPiModelT();
 
     void init();
 
@@ -102,13 +104,16 @@ private:
     void ps32_do_write_access_1s(uint32_t address, uint32_t data, uint32_t size, uint8_t fc);
     void ps32_do_write_access_2s(uint32_t address, uint32_t data, uint32_t size, uint8_t fc);
 
-    Vpistorm* dut_;
-    TickFunc  tick_;
+    TDut*    dut_;
+    TickFunc tick_;
 
     bool use_2slot_ = true;
     int next_slot_ = 0;
     int slot_active_[2] = {0, 0};
     int write_pending_1s_ = 0;
 };
+
+using PiStormPiModel = PiStormPiModelT<Vpistorm>;
+using PiStormPiModelGolden = PiStormPiModelT<Vpistorm_golden>;
 
 #endif // PS_PI_MODEL_H
