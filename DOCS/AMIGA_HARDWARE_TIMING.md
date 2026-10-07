@@ -14,9 +14,9 @@ While modern ARM cores operate at gigahertz frequencies, the Amiga 1200 motherbo
        |  | Alice (Chip RAM &  |        | Budgie (Bus Controller  |  |
        |  |  Custom Agnus Eng) |        |  & Clock Generator)     |  |
        |  +---------+----------+        +------------+------------+  |
-       |            | 560ns                          | E7M (7.09 MHz)|
-       |            | Alice Slot                     | E14M (14.18M) |
-       |            v                                v               |
+       |            | 560ns                          | MC_CLK (14.18 MHz)|
+       |            | Alice Slot                     | (Pin 87 CPUCLK)   |
+       |            v                                v                  |
        |  =================== 150-pin Trapdoor Bus ==================  |
        +-----------------------------+-------------------------------+
                                      |
@@ -44,15 +44,15 @@ The Amiga 1200 master clock oscillator operates at:
 - **NTSC:** $28.63636\text{ MHz}$
 
 The Budgie custom gate array divides the master oscillator to produce:
-- **CPUCLK / E14M:** $14.18758\text{ MHz}$ (approx. $70.5\text{ ns}$ cycle time)
-- **E7M / CCK (Colour Clock):** $7.09379\text{ MHz}$ (approx. $140.9\text{ ns}$ cycle time)
+- **MC_CLK / CPUCLK:** $14.18758\text{ MHz}$ PAL / $14.31818\text{ MHz}$ NTSC (approx. $70.5\text{ ns}$ cycle time). Routed directly to Pin 87 of the 150-pin trapdoor CPU slot.
+- **CCK (Colour Clock):** $7.09379\text{ MHz}$ (approx. $140.9\text{ ns}$ cycle time, used internally by Alice and the custom chips).
 - **CLK90:** Quadrature clock phase shifted by $90^\circ$ for DRAM and chipset multiplexing.
 
 ### 2.2 Motherboard Revisions & The E121/E122 Clock Ringing Issue
-Certain Commodore Amiga 1200 motherboard revisions (specifically **Rev 1D.4** and **Rev 2B**) were shipped from the factory with ferrite beads and capacitors (`E121`, `E122`, `E123`, `E125`) on the clock traces. These passive components were intended to pass FCC/CE electromagnetic emissions tests, but created severe impedance mismatches:
+Certain Commodore Amiga 1200 motherboard revisions (specifically **Rev 1D.4** and **Rev 2B**) were shipped from the factory with ferrite beads and capacitors (`E121`, `E122`, `E123`, `E125`) on the `CPUCLK` clock trace. These passive components were intended to pass FCC/CE electromagnetic emissions tests, but created severe impedance mismatches:
 
 1. **Transmission Line Reflections:** The clock lines act as unterminated transmission lines with high capacitive loading.
-2. **Falling Edge Ringing Dips:** On the falling edge of `E7M` and `CPUCLK`, severe ringing causes a signal dip down to $\approx 1.8\text{ V}$ before settling below $V_{IL}$ ($0.8\text{ V}$).
+2. **Falling Edge Ringing Dips:** On the falling edge of `MC_CLK` (`CPUCLK`), severe ringing causes a signal dip down to $\approx 1.8\text{ V}$ before settling below $V_{IL}$ ($0.8\text{ V}$).
 3. **Threshold Crossing Hazard:** In standard 3.3V LVCMOS or 5V TTL input buffers, an undershoot/bounce to $1.8\text{ V}$ falls directly within the undefined logic threshold region ($0.8\text{ V} < V < 2.0\text{ V}$). Without filtering, the FPGA detects false clock edges, triggering phantom state transitions in the bus state machine and freezing the Amiga.
 
 ```
@@ -71,26 +71,42 @@ Certain Commodore Amiga 1200 motherboard revisions (specifically **Rev 1D.4** an
 ```
 
 ### 2.3 PiStorm32-lite Glitch Filter Implementation
-To ensure **Priority #1 (rock-solid stability on unmodded Amiga motherboards)**, `m68k_interface.v` incorporates a multi-stage filtering and Clock Domain Crossing (CDC) pipeline:
+To ensure **Priority #1 (rock-solid stability on unmodded Amiga motherboards)**, `m68k_interface.v` incorporates a multi-stage filtering and Clock Domain Crossing (CDC) pipeline using a 3-tick lockout counter:
 
 ```verilog
-// 2-Stage CDC Synchronizer on E7M Clock Input
-always @(posedge sys_clk) begin
-    e7m_sync <= {e7m_sync[0], E7M};
-end
+localparam [2:0] MC_CLK_LOCKOUT_TICKS = 3'd3;
 
-// Deglitch Filter: Requires stable signal across consecutive internal clock samples
-always @(posedge sys_clk) begin
-    if (e7m_sync[1] == e7m_sync[0]) begin
-        e7m_filtered <= e7m_sync[1];
+(* async_reg = "true" *) reg [1:0] mc_clk_raw_sync = 2'b00;
+reg       mc_clk_filtered = 1'b0;
+reg [2:0] mc_clk_lockout  = 3'd0;
+reg       rising          = 1'b0; // 1-cycle pulse on filtered 14 MHz rising edge
+reg       falling         = 1'b0; // 1-cycle pulse on filtered 14 MHz falling edge
+
+always @(posedge clk) begin
+    mc_clk_raw_sync <= {mc_clk_raw_sync[0], MC_CLK};
+    rising  <= 1'b0;
+    falling <= 1'b0;
+
+    if (mc_clk_lockout != 3'd0) begin
+        mc_clk_lockout <= mc_clk_lockout - 3'd1;
+    end else begin
+        if (mc_clk_raw_sync[0] && !mc_clk_filtered) begin
+            rising          <= 1'b1;
+            mc_clk_filtered <= 1'b1;
+            mc_clk_lockout  <= MC_CLK_LOCKOUT_TICKS;
+        end else if (!mc_clk_raw_sync[0] && mc_clk_filtered) begin
+            falling         <= 1'b1;
+            mc_clk_filtered <= 1'b0;
+            mc_clk_lockout  <= MC_CLK_LOCKOUT_TICKS;
+        end
     end
 end
 ```
 
-- **Frequency Ratio:** `sys_clk` runs at $\approx 182\text{ MHz}$ ($5.49\text{ ns}$ period), while `E7M` runs at $\approx 7.09\text{ MHz}$ ($140.9\text{ ns}$ period).
-- There are $\approx 25$ `sys_clk` cycles in every `E7M` clock cycle.
-- The 2-stage synchronizer removes metastability.
-- The deglitch filter rejects transients shorter than $2 \times t_{\text{sys\_clk}} \approx 11\text{ ns}$, completely ignoring 1.8V ringing dips without adding latency to legitimate edge detection.
+- **Frequency Ratio:** `sys_clk` runs at $\approx 182\text{ MHz}$ ($5.49\text{ ns}$ period), while `MC_CLK` runs at $\approx 14.18\text{ MHz}$ ($70.5\text{ ns}$ period).
+- There are $\approx 13$ `sys_clk` cycles in every `MC_CLK` clock cycle.
+- The 2-stage synchronizer (`mc_clk_raw_sync`) removes metastability.
+- The lockout filter suppresses re-triggering for $3 \times t_{\text{sys\_clk}} \approx 16.5\text{ ns}$, completely blanking out the 1.8V ringing dip without adding any latency to legitimate edge detection.
 
 ---
 

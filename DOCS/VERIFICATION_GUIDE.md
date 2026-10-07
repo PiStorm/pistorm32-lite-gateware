@@ -105,7 +105,7 @@ The testbench executes 15 distinct, comprehensive test suites:
 To prove that the gateware operates reliably on unmodded Amiga 1200 motherboards with the **E121/E122 clock ringing defect**, the testbench includes an active clock-fault injector:
 
 ```cpp
-// tb/tb_main.cpp - Injects 1.8V Ringing Dips on E7M Falling Edges
+// tb/tb_main.cpp - Injects 1.8V Ringing Dips on MC_CLK (CPUCLK) Falling Edges
 refactor_harness.set_clock_mode(ClockMode::RINGING_UNFIXED);
 refactor_harness.run_mc_cycles(5);
 
@@ -134,7 +134,7 @@ During a 32-bit Chip RAM read cycle, the `m68k_interface.v` state machine orches
 sequenceDiagram
     autonumber
     participant SYS as sys_clk (182 MHz)
-    participant E7M as Amiga E7M (7.09 MHz)
+    participant CLK as Amiga MC_CLK (14.18 MHz)
     participant FSM as m68k FSM State
     participant ADDR as MC_A[31:0]
     participant AS as MC_AS_n (Address Strobe)
@@ -144,7 +144,7 @@ sequenceDiagram
     participant LATCH as mc_data_read
 
     Note over FSM: State S0: Idle / Prepare
-    E7M->>FSM: Rising edge detected
+    CLK->>FSM: Rising edge detected
     FSM->>ADDR: Drive physical address (e.g. $00040000)
     FSM->>ADDR: ADDR_LE = 1, ADDR_OE_n = 0
     
@@ -158,7 +158,7 @@ sequenceDiagram
     DATA-->>LATCH: Memory drives read data (e.g. 0x12345678)
     
     Note over FSM: State S4: Latch Data
-    E7M->>LATCH: Falling edge: Sample DA_IN unconditionally
+    CLK->>LATCH: Falling edge: Sample DA_IN unconditionally
     LATCH->>LATCH: mc_data_read <= 0x12345678
     
     Note over FSM: State S5: Terminate Cycle
@@ -236,21 +236,21 @@ How the 2-stage synchronizer and deglitch filter suppress severe 1.8V ringing di
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Pin as Physical Pin E7M (with 1.8V Ringing Dip)
-    participant S0 as e7m_sync[0] (Stage 1 FF @ 182 MHz)
-    participant S1 as e7m_sync[1] (Stage 2 FF @ 182 MHz)
-    participant Out as e7m_filtered (Deglitch Output)
+    participant Pin as Physical Pin MC_CLK (with 1.8V Ringing Dip)
+    participant S0 as mc_clk_raw_sync[0] (Stage 1 FF @ 182 MHz)
+    participant S1 as mc_clk_raw_sync[1] (Stage 2 FF @ 182 MHz)
+    participant Out as mc_clk_filtered (Deglitch Output)
 
-    Note over Pin: E7M transitions HIGH -> LOW
+    Note over Pin: MC_CLK transitions HIGH -> LOW
     Pin->>Pin: Drops 5.0V -> 1.5V
     Pin->>Pin: RINGING DIP: Bounces back to 1.8V for 4 ns!
     
     Note over S0,S1: Stage 1 & 2 sample during ringing
-    S0->>S0: Samples metastable or temporary 1
+    S0->>S0: Samples temporary logic 1
     S1->>S1: Delayed by 1 sys_clk (5.49 ns)
     
-    Note over Out: Filter Rule: e7m_sync[1] == e7m_sync[0]
-    Note over Out: Transient dip < 2 cycles is completely discarded!
+    Note over Out: Filter Rule: 3-Tick Lockout Counter (MC_CLK_LOCKOUT_TICKS = 3)
+    Note over Out: Transient dip < 16.5 ns is completely blanked out!
     Out->>Out: Remains stable until signal is settled below VIL!
     Note over Out: Result: Clean edge generated, ZERO false state transitions!
 ```
@@ -267,6 +267,6 @@ gtkwave sim.vcd
 ```
 
 ### Signal Paths in GTKWave:
-- **Clocks:** `TOP.pistorm.sys_clk`, `TOP.pistorm.E7M`, `TOP.pistorm.m68k_inst.e7m_filtered`
+- **Clocks:** `TOP.pistorm.sys_clk`, `TOP.pistorm.MC_CLK`, `TOP.pistorm.m68k_inst.mc_clk_filtered`
 - **Amiga Bus:** `TOP.pistorm.m68k_inst.state`, `TOP.pistorm.MC_A`, `TOP.pistorm.DA_IN`, `TOP.pistorm.MC_AS_n`, `TOP.pistorm.MC_DSACK_n`
 - **Wishbone B4 Bus:** `TOP.pistorm.wb_cyc`, `TOP.pistorm.wb_stb`, `TOP.pistorm.wb_we`, `TOP.pistorm.wb_adr`, `TOP.pistorm.wb_dat_w`, `TOP.pistorm.wb_ack`

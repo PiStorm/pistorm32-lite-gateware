@@ -66,7 +66,7 @@ All internal peripherals reside within the 64 KB configured window:
 - **Clock Frequency:** Full $182.0\text{ MHz}$ (`sys_clk`).
 - **Wait States:** **0 Wait States** (single-cycle ACK for all reads and writes).
 - **Throughput:** **$13.5\text{ MB/s}$** transfer rate ($3.54\text{ MOps/s}$) over the Pi host parallel interface.
-- **Motherboard Bus Isolation:** **100% Isolated.** Zero cycles on `E7M`/Alice; transfers occur purely within the FPGA silicon without loading the Amiga bus.
+- **Motherboard Bus Isolation:** **100% Isolated.** Zero cycles on the Amiga motherboard bus / Alice; transfers occur purely within the FPGA silicon without loading the Amiga bus.
 
 ---
 

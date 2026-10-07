@@ -48,7 +48,7 @@ The **PiStorm32-lite** gateware is organized into a clean, modular, three-tier a
 ## 2. Core Modules Breakdown
 
 ### 2.1 Top-Level (`PS32-lite.v`)
-- **Clock Generator:** Synthesizes `sys_clk` ($\approx 182\text{ MHz}$) from the Amiga `E7M` ($7.09\text{ MHz}$) clock using the Efinix PLL.
+- **Clock Generator:** Synthesizes `sys_clk` ($\approx 182\text{ MHz}$) from the Amiga `MC_CLK` ($14.18\text{ MHz}$ `CPUCLK`) clock using the internal Efinix PLL (`AMIPLL`).
 - **Interconnect Multiplexing:** Decodes transaction target addresses from `pi_interface`:
   - Internal ranges (Virtual Zorro-II space `$00E80000`–`$00E9FFFF`): Routed directly to `zorro_device.v` via Wishbone B4.
   - External ranges (Chip RAM, Custom Chipset, Motherboard ROM, Expansion slots): Routed to `m68k_interface.v`.
@@ -67,8 +67,8 @@ The **PiStorm32-lite** gateware is organized into a clean, modular, three-tier a
 ### 2.3 Amiga Bus Master (`m68k_interface.v`)
 - **Full MC68020 Bus Protocol:** Implements standard states $S_0 \to S_1 \to S_2 \to S_3 \to S_4 \to S_5$ adhering to Motorola MC68020 timing specifications.
 - **Dynamic Bus Sizing:** Dynamically handles 8-bit, 16-bit, and 32-bit slave ports via `DSACK0_n` and `DSACK1_n`.
-- **Clock Domain Crossing (CDC):** Safely synchronizes asynchronous Amiga motherboard control signals (`E7M`, `DSACK_n`, `BERR_n`, `IPL_n`) into the $182\text{ MHz}$ internal clock domain.
-- **Glitch & Ringing Filter:** Filters high-frequency reflections and 1.8V undershoot ringing dips on unmodded Amiga 1200 motherboard clock lines.
+- **Clock Domain Crossing (CDC):** Safely synchronizes asynchronous Amiga motherboard control signals (`MC_CLK`, `DSACK_n`, `BERR_n`, `IPL_n`) into the $182\text{ MHz}$ internal clock domain.
+- **Glitch & Ringing Filter:** Filters high-frequency reflections and 1.8V undershoot ringing dips on unmodded Amiga 1200 motherboard `CPUCLK` lines via a 3-tick lockout counter.
 - **Data Bus Latching:** Samples the Amiga data bus (`DA_IN`) unconditionally on the falling edge of `sys_clk`, identical to the Golden Reference timing.
 
 ### 2.4 Virtual Coprocessor & Expansion (`zorro_device.v`)
@@ -87,13 +87,12 @@ The **PiStorm32-lite** gateware is organized into a clean, modular, three-tier a
 
 | Clock Name | Nominal Frequency | Source | Purpose |
 | :--- | :---: | :--- | :--- |
-| `E7M` | $7.09379\text{ MHz}$ | Amiga 1200 Motherboard (Budgie) | External Amiga bus clock reference |
-| `E14M` / `CPUCLK` | $14.18758\text{ MHz}$ | Amiga 1200 Motherboard (Budgie) | Motherboard CPU clock |
-| `sys_clk` | $182.0\text{ MHz}$ | Internal Efinix PLL (Cleaner PLL) | Internal FPGA core, FSM, and Wishbone bus |
+| `MC_CLK` / `CPUCLK` | $14.18758\text{ MHz}$ (PAL) / $14.31818\text{ MHz}$ (NTSC) | Amiga 1200 Trapdoor Pin 87 (Budgie) | External Amiga 68EC020 bus clock reference & PLL input |
+| `sys_clk` | $182.0\text{ MHz}$ | Internal Efinix PLL (`AMIPLL`, 13x multiplier) | Internal FPGA core, m68k FSM, and Wishbone bus |
 | `PIN_CCK` | Variable (up to $50\text{ MHz}$) | Raspberry Pi Host | Pi host parallel interface clock |
 
 ### 3.2 Clock Domain Crossing (CDC) Rules
-1. All signals crossing from Amiga domain (`E7M`) to `sys_clk` pass through dual-stage flop synchronizers (`e7m_sync`).
+1. All signals crossing from Amiga domain (`MC_CLK`, `MC_RESET_n`, `MC_HALT_n`, `MC_IPL_n`) to `sys_clk` pass through dual-stage flop synchronizers (`mc_clk_raw_sync`).
 2. High-speed bus control signals (`DSACK0_n`, `DSACK1_n`, `BERR_n`) use registered capture synchronized to the internal bus state machine.
 3. Wishbone transactions run fully synchronous to `sys_clk` and require zero synchronization overhead when accessed from the internal core.
 
