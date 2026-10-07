@@ -225,11 +225,12 @@ void run_benchmark_suite(SimulationHarness& harness) {
     // -------------------------------------------------------------------------
     // 15.1: Chipmem Benchmark ($00040000..$0004FFFF)
     // 32-bit Amiga 1200 Motherboard Chip RAM, Alice/Budgie bus arbitration
+    // Accurate 560 ns Alice slot: 4 x 140 ns CCK = 8 MC_CLK cycles (5 wait states)
     // -------------------------------------------------------------------------
     std::cout << ANSI_BOLD ANSI_BLUE "\n  [15.1] Benchmarking Amiga 1200 Motherboard Chip RAM ($00040000)...\n" ANSI_RESET;
     uint32_t chipmem_base = 0x00040000;
     amiga->set_port_width_region(chipmem_base, 0x10000, PortWidth::PORT_32BIT);
-    amiga->set_wait_states(1); // Realistic 1 WS for A1200 Alice arbitration (4 MC_CLK cycles per transfer)
+    amiga->set_wait_states(5); // 5 WS = 8 MC_CLK cycles = 563.8 ns (4 x 140 ns slot)
 
     // Pre-populate test pattern in memory
     for (int i = 0; i < 64; ++i) {
@@ -251,7 +252,7 @@ void run_benchmark_suite(SimulationHarness& harness) {
     uint64_t b1 = amiga->get_total_bus_cycles();
     TEST_ASSERT(last_val == (0x11000000 | 63), "Chipmem Read (No Prefetch): Read data matches memory");
     TEST_ASSERT((b1 - b0) == 64, "Chipmem Read (No Prefetch): Generated exactly 64 motherboard bus cycles");
-    stats.push_back({"Chipmem 32-bit Read (No Prefetch)", "32-bit Motherboard", "1 WS (4 clks)", 64, 4, t1 - t0, b1 - b0});
+    stats.push_back({"Chipmem 32-bit Read (No Prefetch)", "32-bit Motherboard", "560ns Alice Slot", 64, 4, t1 - t0, b1 - b0});
 
     // 15.1b: Chipmem Sequential 32-bit Read (Prefetch Enabled)
     pi->ps_set_control(CONTROL_ENABLE_PREFETCH);
@@ -282,7 +283,7 @@ void run_benchmark_suite(SimulationHarness& harness) {
     b1 = amiga->get_total_bus_cycles();
     TEST_ASSERT(amiga->mem_read_32(chipmem_base + 63 * 4) == (0xCAFE0000 | 63), "Chipmem Write: Memory verification in RAM");
     TEST_ASSERT((b1 - b0) == 64, "Chipmem Write: Generated exactly 64 motherboard bus cycles");
-    stats.push_back({"Chipmem 32-bit Write (Pipelined)", "32-bit Motherboard", "1 WS (2-Slot)", 64, 4, t1 - t0, b1 - b0});
+    stats.push_back({"Chipmem 32-bit Write (Pipelined)", "32-bit Motherboard", "560ns (2-Slot)", 64, 4, t1 - t0, b1 - b0});
 
     // 15.1d: Chipmem Sequential 16-bit Word Read
     t0 = harness.get_now_ns();
@@ -294,7 +295,7 @@ void run_benchmark_suite(SimulationHarness& harness) {
     t1 = harness.get_now_ns();
     b1 = amiga->get_total_bus_cycles();
     TEST_ASSERT(last_val16 != 0, "Chipmem 16-bit Word Read: Non-zero data received");
-    stats.push_back({"Chipmem 16-bit Word Read", "32-bit Motherboard", "1 WS (4 clks)", 64, 2, t1 - t0, b1 - b0});
+    stats.push_back({"Chipmem 16-bit Word Read", "32-bit Motherboard", "560ns Alice Slot", 64, 2, t1 - t0, b1 - b0});
 
     // 15.1e: Chipmem Sequential 16-bit Word Write
     t0 = harness.get_now_ns();
@@ -306,16 +307,16 @@ void run_benchmark_suite(SimulationHarness& harness) {
     t1 = harness.get_now_ns();
     b1 = amiga->get_total_bus_cycles();
     TEST_ASSERT(amiga->mem_read_16(chipmem_base + 63 * 2) == (0xBEEF ^ 63), "Chipmem 16-bit Word Write: Verified in RAM");
-    stats.push_back({"Chipmem 16-bit Word Write", "32-bit Motherboard", "1 WS (2-Slot)", 64, 2, t1 - t0, b1 - b0});
+    stats.push_back({"Chipmem 16-bit Word Write", "32-bit Motherboard", "560ns (2-Slot)", 64, 2, t1 - t0, b1 - b0});
 
     // -------------------------------------------------------------------------
     // 15.2: Custom Chipset Benchmark ($00DFF000..$00DFFFFF)
-    // 16-bit Port Width, 7 MHz CCK synchronization delay (2 wait states)
+    // 16-bit Port Width, 4 x 140 ns = 560 ns OCS/AGA Slot Grid (5 wait states)
     // -------------------------------------------------------------------------
     std::cout << ANSI_BOLD ANSI_BLUE "\n  [15.2] Benchmarking Amiga Custom Chipset ($00DFF000)...\n" ANSI_RESET;
     uint32_t chipset_base = 0x00DFF000;
     amiga->set_port_width_region(chipset_base, 0x1000, PortWidth::PORT_16BIT);
-    amiga->set_wait_states(2); // 2 wait states for 7 MHz CCK color clock sync
+    amiga->set_wait_states(5); // 5 WS = 8 MC_CLK cycles = 563.8 ns (4 x 140 ns slot)
 
     for (int i = 0; i < 64; ++i) {
         amiga->mem_write_16(chipset_base + i * 2, 0x0A00 | (uint16_t)i);
@@ -330,7 +331,7 @@ void run_benchmark_suite(SimulationHarness& harness) {
     t1 = harness.get_now_ns();
     b1 = amiga->get_total_bus_cycles();
     TEST_ASSERT((b1 - b0) == 64, "Chipset Read: 64 word reads generated 64 bus cycles");
-    stats.push_back({"Chipset 16-bit Word Read", "16-bit Custom Chips", "2 WS (CCK sync)", 64, 2, t1 - t0, b1 - b0});
+    stats.push_back({"Chipset 16-bit Word Read", "16-bit Custom Chips", "560ns CCK Slot", 64, 2, t1 - t0, b1 - b0});
 
     // 15.2b: Custom Chipset 16-bit Word Write (e.g. Copper list / Color palette poke)
     t0 = harness.get_now_ns();
@@ -343,7 +344,7 @@ void run_benchmark_suite(SimulationHarness& harness) {
     b1 = amiga->get_total_bus_cycles();
     TEST_ASSERT((b1 - b0) == 64, "Chipset Write: 64 word writes generated 64 bus cycles");
     TEST_ASSERT(amiga->mem_read_16(chipset_base + 0x180 + (31 * 2)) == (0x0F00 | 63), "Chipset Write: Verified in custom register space");
-    stats.push_back({"Chipset 16-bit Word Write", "16-bit Custom Chips", "2 WS (Sync Poke)", 64, 2, t1 - t0, b1 - b0});
+    stats.push_back({"Chipset 16-bit Word Write", "16-bit Custom Chips", "560ns CCK Slot", 64, 2, t1 - t0, b1 - b0});
 
     // 15.2c: Custom Chipset 32-bit Longword Write (Dynamic Bus Sizing)
     // 32 longwords on a 16-bit port decompose into 64 physical bus cycles
@@ -356,7 +357,7 @@ void run_benchmark_suite(SimulationHarness& harness) {
     t1 = harness.get_now_ns();
     b1 = amiga->get_total_bus_cycles();
     TEST_ASSERT((b1 - b0) == 64, "Chipset Dynamic Sizing: 32 longword transfers generated 64 16-bit bus cycles");
-    stats.push_back({"Chipset 32-bit Dyn Sizing", "16-bit Custom Chips", "2 WS (2x cycles)", 32, 4, t1 - t0, b1 - b0});
+    stats.push_back({"Chipset 32-bit Dyn Sizing", "16-bit Custom Chips", "560ns (2x cycles)", 32, 4, t1 - t0, b1 - b0});
 
     // -------------------------------------------------------------------------
     // 15.3: Virtual Zorro-II Benchmark ($00E90000..$00E902FF)
