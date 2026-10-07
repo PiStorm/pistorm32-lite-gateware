@@ -262,6 +262,8 @@ module m68k_interface (
     reg         chained_prefetch_allowed = 1'b0;
     reg         can_prefetch = 1'b0;         // Trigger prefetch when bus is idle
     reg [1:0]   req_prefetch_hit = 2'b00;    // Slot 0 / 1 hit flags (locally cached)
+    reg [1:0]   latched_port_width = 2'd0;   // Captured during active /AS (S5)
+    reg [1:0]   latched_size = 2'd0;         // Captured transfer size (S5)
 
     // MC68020 physical bus register staging
     reg [2:0]   mc_fc = 3'd0;
@@ -414,8 +416,8 @@ module m68k_interface (
     // Prefetch Safety Filter:
     // Only prefetch from Chip-RAM ($000000..$1FFFFF) or Expansion RAM ($E00000..$FFFFFF).
     // NEVER speculatively prefetch from CIA ($BFExxx) or Custom Registers ($DFFxxx)!
-    wire prefetch_eligible_term = terminated_normally && rw && (cur_req_size == 2'd3) &&
-                                 (cur_req_addr[1:0] == 2'b00) && (port_width == 2'd3) &&
+    wire prefetch_eligible_term = terminated_normally && rw && (latched_size == 2'd3) &&
+                                 (address[1:0] == 2'b00) && (latched_port_width == 2'd3) &&
                                  ((address[23:21] == 3'b000) || (&address[23:19]));
 
     // Prefetch hit detection qualification signals
@@ -677,6 +679,8 @@ module m68k_interface (
                     left_shift         <= address[1:0] & port_width;
                     transfered         <= port_width - (address[1:0] & port_width);
                     size_le_transfered <= (size <= (port_width - (address[1:0] & port_width)));
+                    latched_port_width <= port_width;
+                    latched_size       <= size;
 
                     if (rw)
                         state <= STATE_UPDATE_DATA_READ;
@@ -880,6 +884,8 @@ module m68k_interface (
             next_prefetch_allowed    <= 1'b0;
             chained_prefetch_allowed <= 1'b0;
             req_prefetch_hit         <= 2'b00;
+            latched_port_width       <= 2'd0;
+            latched_size             <= 2'd0;
         end
 
         // Hard reset initialization of internal Zorro transfer registers
