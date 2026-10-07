@@ -192,6 +192,9 @@ flowchart TD
     HitCheck -- "Miss" --> Invalidate["Flush buffer, run standard cycle for B"]
 ```
 
+**Speculative Prefetch Simulation Waveform (WaveDrom SVG):**
+![Speculative Prefetch Cache Hit Waveform](waveforms/prefetch_cache_hit.svg)
+
 ---
 
 ## 6. Virtual Zorro-II & Wishbone Interconnect
@@ -279,3 +282,53 @@ always @(posedge clk) begin
     end
 end
 ```
+
+---
+
+## 8. Speculative Prefetch Engine & Hardware Coherency
+
+The FPGA incorporates an autonomous speculative read prefetch engine accelerating Chip RAM reads from 1.4 MB/s to over 3.1 MB/s (`readw`) and 5.6 MB/s (`readm`).
+
+### 16-bit & 32-bit Word Prefetching:
+- **32-bit Longword Prefetch:** Whenever a 32-bit read completes normally in Chip RAM (`$000000..$1FFFFF`) or Expansion RAM (`$E00000..$FFFFFF`), the FSM speculatively launches a bus cycle for `address + 4` while the host Pi prepares its next request.
+- **16-bit Word Prefetch (`ENABLE_16BIT_PREFETCH`):** Because Amiga 1200 Chip RAM has a 32-bit wide data bus, physical 32-bit reads return two 16-bit words simultaneously:
+  - Upper word: `address[1] == 0` (even word)
+  - Lower word: `address[1] == 1` (odd word)
+  When code reads consecutive 16-bit words (such as rendering text or unrolled copy loops), word 1 is served directly from the FPGA prefetch buffer with **0 physical bus cycles**, halving bus traffic!
+
+### Strict Hardware Write Coherency:
+1. **Hardware-Locking:** The prefetch hit qualifier requires `new_req_rw == 1'b1` (Read). A write request can **never** hit the prefetch buffer.
+2. **Atomic Invalidation:** Any write request arriving at the FSM instantly and unconditionally invalidates all prefetch tags in the very same clock cycle before dispatching the write:
+   ```verilog
+   prefetch_valid       <= 1'b0;
+   prefetch_word0_avail <= 1'b0;
+   prefetch_word1_avail <= 1'b0;
+   prefetch_eligible    <= 1'b0;
+   req_prefetch_hit     <= 2'b00;
+   ```
+3. **Safety Filtering:** Prefetching is strictly forbidden in CIA (`$BFE000..$BFFFFF`) and Custom Register space (`$DFF000..$DFFFFF`) to prevent side-effects on hardware strobes.
+
+---
+
+## 9. Fast DSACK Termination & 7.09 MHz CCK Phase Alignment
+
+### Fast DSACK Termination:
+The original PiStorm gateware held `/AS` asserted across a redundant `STATE_S4_NOP` state, creating an 82 ns post-DSACK dead time. Fast DSACK terminates the cycle on the falling edge of `MC_CLK` immediately after `/DSACK` assertion, reducing cycle length from 609 ns to 527 ns for reads, and 569 ns to 456 ns for writes.
+
+### 7.09 MHz Colour Clock (CCK) Synchronization:
+The Amiga 1200 custom chipset (Alice) operates on a 7.09 MHz bus slot raster. Because the CPU socket only receives a 14.18 MHz clock (`MC_CLK`), there are two possible phases per 7 MHz cycle:
+- **Phase 0:** Alice fast write slot (5 wait states = 456 ns)
+- **Phase 1:** Alice fast read slot (6 wait states = 527 ns)
+
+Asserting `/AS` on the wrong phase forces Alice to add a full 70 ns wait state penalty. The CCK synchronizer aligns `/AS` assertions to Alice's slot raster and utilizes DMA-immune auto-calibration:
+- Only clean fast cycles (`<= 5` wait states on write, or `<= 6` wait states on read) lock the phase.
+- Cycles delayed by chipset DMA are ignored, preventing false phase inversion.
+
+---
+
+## 10. Micronik Busboard Hardware Compatibility
+
+Micronik 6860 series Zorro busboards (v4.20 and v5.42) do not route the processor bus `_BG` (Bus Grant) signal from the motherboard edge connector through to the accelerator trapdoor connector.
+- **Problem:** Because `_BG` is left floating, standard input buffers with pull-ups see `_BG` as high (inactive), causing the FPGA to believe bus mastership is never granted (`is_bm = 0`).
+- **Solution:** The FPGA's `MC_BG_n` pin is configured with an internal **weak pull-down (~50 kΩ)** in `PS32-lite.peri.xml`. If the signal is left unconnected (floating on Micronik busboards), it is gently pulled low into active bus grant state. When installed in standard Amiga motherboards, Gayle drives the pin strongly high or low, easily overriding the 50 kΩ pull-down. This provides 100% plug-and-play compatibility without requiring wire jumpers.
+

@@ -15,32 +15,29 @@ The Budgie gate array divides this to produce the primary system clocks:
 - **`CCK` (Colour Clock):** 7.09379 MHz (approx. 140.9 ns period), used internally by Alice and the custom chips.
 - **`CLK90`:** 7.09 MHz quadrature clock shifted 90 degrees for DRAM and chipset timing.
 
-```
-       +-------------------------------------------------------------+
-       |             Commodore Amiga 1200 Motherboard                |
-       |                                                             |
-       |  +--------------------+        +-------------------------+  |
-       |  | Alice (Chip RAM &  |        | Budgie (Bus Controller  |  |
-       |  |  Custom Chipsets)  |        |  & Clock Generator)     |  |
-       |  +---------+----------+        +------------+------------+  |
-       |            | 560ns                          | MC_CLK (14.18 MHz)|
-       |            | Alice Slot                     | (Pin 87 CPUCLK)   |
-       |            v                                v                  |
-       |  =================== 150-pin Trapdoor Bus ==================  |
-       +-----------------------------+-------------------------------+
-                                     |
-                         Level Shifters (74CB3T3245)
-                                     |
-       +-----------------------------v-------------------------------+
-       |               PiStorm32-Lite (Efinix T20 FPGA)              |
-       |                                                             |
-       |   [ 2-Stage CDC Sync ] ---> [ Lockout Filter (3 ticks) ]    |
-       |                                      |                      |
-       |                           [ 182 MHz sys_clk PLL ]           |
-       |                                      |                      |
-       |                              [ m68k_interface ]             |
-       |                            Dynamic Bus Sizing FSM           |
-       +-------------------------------------------------------------+
+```mermaid
+flowchart TD
+    subgraph A1200["Commodore Amiga 1200 Motherboard"]
+        ALICE["Alice<br/><i>(Chip RAM & Custom Chipset)</i>"]
+        BUDGIE["Budgie<br/><i>(Bus Controller & Clock Gen)</i>"]
+    end
+
+    TRAPDOOR["150-pin Trapdoor Edge Connector<br/><i>(Level Shifters 74CB3T3245)</i>"]
+
+    subgraph FPGA["PiStorm32-Lite (Efinix T20 FPGA)"]
+        CDC["2-Stage CDC Synchronizer"]
+        FILTER["Lockout Filter<br/><i>(3 sys_clk ticks / 16.5 ns)</i>"]
+        PLL["182 MHz sys_clk PLL<br/><i>(AMIPLL)</i>"]
+        FSM["m68k_interface.v<br/><i>(Dynamic Bus Sizing FSM)</i>"]
+    end
+
+    ALICE -->|"560ns Alice Bus Slot"| TRAPDOOR
+    BUDGIE -->|"MC_CLK (14.18 MHz CPUCLK)"| TRAPDOOR
+    TRAPDOOR --> CDC
+    CDC --> FILTER
+    FILTER --> PLL
+    PLL --> FSM
+    TRAPDOOR <-->|"MC_A, MC_D, AS#, DS#, DSACK#"| FSM
 ```
 
 ---
@@ -106,6 +103,9 @@ end
 - With `sys_clk` at 182 MHz ($5.49\text{ ns}$ period), there are ~13 internal ticks per 14.18 MHz `MC_CLK` cycle.
 - A 2-stage synchronizer (`mc_clk_raw_sync`) removes metastability.
 - The lockout counter ignores signal changes for 3 `sys_clk` ticks ($16.5\text{ ns}$) after each valid edge, which completely blankets the 1.8V ringing dip.
+
+**Glitch Filter Simulation Waveform (WaveDrom SVG):**
+![Lockout Filter Waveform](waveforms/clock_glitch_filter.svg)
 
 ---
 

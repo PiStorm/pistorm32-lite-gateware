@@ -1,0 +1,71 @@
+{
+  "signal": [
+    {
+      "name": "sys_clk (182 MHz)",
+      "wave": "ppppppppppppppppppppppppppppppp"
+    },
+    {
+      "name": "MC_CLK (14.18 MHz)",
+      "wave": "1.0....1....0....1....0....1..."
+    },
+    {
+      "name": "FSM State",
+      "wave": "=...=....=.....=........====...",
+      "data": [
+        "S1_AS",
+        "S2_OPEN",
+        "S3_WAIT",
+        "S5_LATCH",
+        "UPDATE",
+        "TERM",
+        "S0_IDLE",
+        "S0_START"
+      ]
+    },
+    {
+      "name": "MC_A[23:0]",
+      "wave": "=..........................=...",
+      "data": [
+        "0x1000",
+        "0x1004"
+      ]
+    },
+    {
+      "name": "MC_RW (1=Read)",
+      "wave": "1.............................."
+    },
+    {
+      "name": "MC_AS_n",
+      "wave": "1...0...................1......"
+    },
+    {
+      "name": "MC_DS_n",
+      "wave": "1...0...................1......"
+    },
+    {
+      "name": "MC_DSACK[1:0]_n",
+      "wave": "=...........=..............=...",
+      "data": [
+        "NONE",
+        "32-BIT",
+        "NONE"
+      ]
+    },
+    {
+      "name": "DA_IN (Read Data)",
+      "wave": "=......=...................=...",
+      "data": [
+        "0x0",
+        "0xA1B2C3D4",
+        "0x0"
+      ]
+    }
+  ],
+  "head": {
+    "text": "Amiga 1200 Fast DSACK 32-Bit Read Cycle (68EC020)",
+    "tick": 0
+  },
+  "config": {
+    "hscale": 1
+  }
+}

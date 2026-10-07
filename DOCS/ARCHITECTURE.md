@@ -6,41 +6,28 @@ Efinix Trion T20 FPGA gateware design for the PiStorm32-lite accelerator.
 
 ## 1. Block Diagram
 
-```
-                      +---------------------------------------------------+
-                      |             Raspberry Pi 4 / CM4 Host            |
-                      |            (16-bit Parallel GPIO Bus)             |
-                      +-------------------------+-------------------------+
-                                                |
-                                                | PI_D[15:0], PI_A[2:0],
-                                                | PI_RD, PI_WR
-                                                v
-                      +---------------------------------------------------+
-                      |               pi_interface.v                      |
-                      |  - 2-slot request queue                           |
-                      |  - Control and status registers (CSR)             |
-                      |  - Speculative read prefetch engine               |
-                      |  - Address decoding & Wishbone initiator          |
-                      +---------+-------------------------------+---------+
-                                |                               |
-               Wishbone B4 Bus  | (Internal $00E9xxxx)          | (Amiga Bus Transfers)
-                                v                               v
-+-------------------------------------------------+   +------------------------------------+
-|                zorro_device.v                   |   |         m68k_interface.v           |
-|  - Virtual Zorro-II AutoConfig ($00E80000)      |   |  - MC68020 bus master FSM (S0..S5) |
-|  - 64 KB internal I/O window ($00E90000)        |   |  - Dynamic bus sizing (DSACK0/1)   |
-|  - Scratchpad SRAM (4 KB, 0-WS)                 |   |  - 14 MHz MC_CLK lockout filter    |
-|  - SPI / Mailbox FIFO                           |   |  - CDC synchronizers               |
-|  - Amiga interrupts (INT2 / INT6)               |   |  - Level shifter control signals   |
-|  - ESP32-style GPIO matrix                      |   +------------------+-----------------+
-+-------------------------------------------------+                      |
-                                                                         | MC_A[31:0], MC_D[31:0],
-                                                                         | AS#, DS#, RW, DSACK#
-                                                                         v
-                                                      +------------------------------------+
-                                                      |     Amiga 1200 Motherboard Bus     |
-                                                      |   (Chip RAM, Alice, Custom Chips)  |
-                                                      +------------------------------------+
+```mermaid
+flowchart TD
+    subgraph HOST["Host System"]
+        RPI["Raspberry Pi 4 / CM4 Host<br/><i>(16-bit Parallel GPIO Bus)</i>"]
+    end
+
+    subgraph FPGA["PiStorm32-lite Gateware (Efinix Trion T20)"]
+        PI_IF["<b>pi_interface.v</b><br/>• 2-Slot Request Queue<br/>• Control and Status Registers (CSR)<br/>• Speculative Read Prefetch Engine<br/>• Address Decoding & Wishbone Initiator"]
+        
+        ZORRO["<b>zorro_device.v</b><br/>• Virtual Zorro-II AutoConfig ($00E80000)<br/>• 64 KB Internal I/O Window ($00E90000)<br/>• Scratchpad SRAM (4 KB, 0-WS)<br/>• SPI / Mailbox FIFO<br/>• Amiga Interrupts (INT2 / INT6)<br/>• ESP32-style GPIO Matrix"]
+        
+        M68K["<b>m68k_interface.v</b><br/>• MC68020 Bus Master FSM (S0..S5)<br/>• Ultra-Turbo Fast DSACK & CCK Phase Sync<br/>• Dynamic Bus Sizing (DSACK0/1)<br/>• 14 MHz MC_CLK Lockout Glitch Filter<br/>• CDC Synchronizers & Level Shifter Controls"]
+    end
+
+    subgraph AMIGA["Amiga 1200 Hardware"]
+        MOTHERBOARD["Amiga 1200 Motherboard Bus<br/><i>(Chip RAM, Alice, Custom Chips, Budgie, Gayle)</i>"]
+    end
+
+    RPI -->|"PI_D[15:0], PI_A[2:0]<br/>PI_RD, PI_WR"| PI_IF
+    PI_IF -->|"Wishbone B4 Bus (182 MHz)<br/>(Internal $00E9xxxx)"| ZORRO
+    PI_IF -->|"Amiga Bus Transfers"| M68K
+    M68K -->|"MC_A[31:0], MC_D[31:0]<br/>AS#, DS#, RW, DSACK#"| MOTHERBOARD
 ```
 
 ---
@@ -62,6 +49,8 @@ Efinix Trion T20 FPGA gateware design for the PiStorm32-lite accelerator.
 
 ### `m68k_interface.v`
 - Executes standard MC68020 bus cycles ($S_0 \to S_1 \to S_2 \to S_3 \to S_4 \to S_5$).
+- Ultra-Turbo bus engine: Fast DSACK termination (-82 ns dead time) and 7.09 MHz CCK phase alignment.
+- DMA-immune CCK phase auto-calibration locking 100% of reads to Phase 1 (527 ns) and writes to Phase 0 (456 ns).
 - Handles dynamic bus sizing via `DSACK0_n` / `DSACK1_n` (8-bit, 16-bit, and 32-bit ports).
 - Filters 14.18 MHz `MC_CLK` with a 3-tick lockout counter to prevent false triggers from 1.8V ringing dips.
 - Samples read data (`DA_IN`) unconditionally on falling clock edges, matching upstream gateware timing.
@@ -70,7 +59,7 @@ Efinix Trion T20 FPGA gateware design for the PiStorm32-lite accelerator.
 - Emulates AutoConfig ROM nibbles at `$00E80000` (Manufacturer ID 28020, Product ID 0x32).
 - Maps a 64 KB Wishbone B4 memory space at `$00E90000`.
 - Wishbone slaves:
-  - Slave 0 (`+$0000`): Scratchpad SRAM (4 KB, 0 wait states).
+  - Slave 0 (`+$0000`): Scratchpad SRAM (4 KB, 0 wait states), `BUS_CTRL` (`+$1C`), and hardware profiler telemetry registers (`+$20`..`+$34`).
   - Slave 1 (`+$1000`): SPI / Coprocessor mailbox FIFO.
   - Slave 2 (`+$2000`): ESP32-style GPIO matrix and IO MUX.
   - Slave 3 (`+$3000`): Interrupt controller (asserts Amiga INT2 and INT6).

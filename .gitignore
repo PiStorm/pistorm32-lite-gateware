@@ -13,7 +13,12 @@ view.gtkw
 *.vcd
 *.1
 *.json
+!DOCS/waveforms/*.json
 obj_dir/
 obj_dir_golden/
 tb_pistorm32
 bench/pistorm_bench
+*.jpg
+firmware_v3_*.bin.gz
+__pycache__/
+*.pyc

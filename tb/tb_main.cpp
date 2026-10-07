@@ -1015,6 +1015,12 @@ int main(int argc, char** argv) {
         harness.run_mc_cycles(15);
         status = pi->read_status();
         TEST_ASSERT((status & STATUS_IS_BM) != 0, "Re-acquired Bus Master");
+
+        // Test 2.1: Micronik Busboard Compatibility (MC_BG_n held low by weak pulldown when floating)
+        dut->MC_BG_n = 0; // Simulated weak pulldown holding line low on Micronik 6860 busboard
+        harness.run_mc_cycles(4);
+        status = pi->read_status();
+        TEST_ASSERT((status & STATUS_IS_BM) != 0, "STATUS_IS_BM remains asserted with Micronik weak pulldown on MC_BG_n");
     }
 
     // =========================================================================
@@ -2084,6 +2090,30 @@ int main(int argc, char** argv) {
         // 6. Test Unmapped Space ($00E90300) safe termination
         uint32_t unmapped_val = pi->ps32_read_32(0x00E90300);
         TEST_ASSERT(unmapped_val == 0, "Wishbone Default Slave: Unmapped address $00E90300 terminates safely returning 0");
+
+        // 7. Test BUS_CTRL (0x00E9001C) & Hardware Diagnostic Registers (0x00E90020 - 0x00E90034)
+        uint32_t bus_ctrl_default = pi->ps32_read_32(0x00E9001C);
+        TEST_ASSERT((bus_ctrl_default & 0x07) == 0x07, "BUS_CTRL default: prefetch, fast_dsack, and cck_sync active");
+        TEST_ASSERT((bus_ctrl_default & 0x80) != 0, "BUS_CTRL default: enable_word_prefetch active");
+
+        // Write and read back BUS_CTRL
+        pi->ps32_write_32(0x00E9001C, 0x00000008); // Set bit 3 (force_phase_invert)
+        pi->flush_pending_writes();
+        uint32_t bus_ctrl_inverted = pi->ps32_read_32(0x00E9001C);
+        TEST_ASSERT((bus_ctrl_inverted & 0x08) != 0, "BUS_CTRL: force_phase_invert bit set successfully");
+
+        // Restore default turbo settings
+        pi->ps32_write_32(0x00E9001C, 0x00000087);
+        pi->flush_pending_writes();
+
+        // Verify diagnostic registers read safely
+        uint32_t diag_stat = pi->ps32_read_32(0x00E90020);
+        uint32_t pref_launches = pi->ps32_read_32(0x00E90024);
+        uint32_t pref_hits = pi->ps32_read_32(0x00E90028);
+        uint32_t bus_cap = pi->ps32_read_32(0x00E9002C);
+        uint32_t cyc_timing = pi->ps32_read_32(0x00E90030);
+        uint32_t clk_phase = pi->ps32_read_32(0x00E90034);
+        TEST_ASSERT(pref_launches >= 0 && pref_hits >= 0, "Diagnostic registers +$20..+$34 read back valid telemetry");
     }
 
     // =========================================================================

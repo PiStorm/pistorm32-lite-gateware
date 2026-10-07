@@ -1,0 +1,59 @@
+{
+  "signal": [
+    {
+      "name": "sys_clk (182 MHz Wishbone)",
+      "wave": "ppppppppppp"
+    },
+    {
+      "name": "wb_cyc",
+      "wave": "0..1.0....."
+    },
+    {
+      "name": "wb_stb",
+      "wave": "0..1.0....."
+    },
+    {
+      "name": "wb_we (1=Write)",
+      "wave": "0.........."
+    },
+    {
+      "name": "wb_adr [15:0]",
+      "wave": "=..........",
+      "data": [
+        "0x0"
+      ]
+    },
+    {
+      "name": "wb_dat_m2s (Write Data)",
+      "wave": "=..=.......",
+      "data": [
+        "0x0",
+        "0xDEAD00E0"
+      ]
+    },
+    {
+      "name": "wb_dat_s2m (Read Data)",
+      "wave": "=...==.....",
+      "data": [
+        "0x0",
+        "0x50533332",
+        "0x0"
+      ]
+    },
+    {
+      "name": "wb_ack (0 WS)",
+      "wave": "0...10....."
+    },
+    {
+      "name": "Amiga MC_AS_n (Isolated)",
+      "wave": "1.........."
+    }
+  ],
+  "head": {
+    "text": "Virtual Zorro-II Internal Wishbone Access (182 MHz, 0-WS, Isolated)",
+    "tick": 0
+  },
+  "config": {
+    "hscale": 1
+  }
+}

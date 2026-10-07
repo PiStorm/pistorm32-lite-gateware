@@ -32,6 +32,9 @@ bench: build
 trace: build
 	./tb_pistorm32 --trace
 
+waveforms: trace
+	python3 scripts/vcd2wavedrom.py --preset all
+
 clean:
 	rm -rf obj_dir obj_dir_golden tb_pistorm32 sim.vcd outflow work_syn work_pnr
 
@@ -39,4 +42,4 @@ bitstream:
 	efx_run --prj -f compile PS32-lite
 	gzip -c -9 outflow/PS32-lite.hex.bin > firmware.bin.gz
 
-.PHONY: all build run test bench trace clean bitstream
+.PHONY: all build run test bench trace waveforms clean bitstream

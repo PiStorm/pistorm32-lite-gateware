@@ -6,25 +6,15 @@ The testbench uses Verilator to co-simulate two implementations side-by-side:
 
 This verifies that new features introduce no timing regressions on standard Amiga bus cycles ($\Delta = 0$ cycles).
 
-```
-       +-------------------------------------------------------------+
-       |                  Verilator C++ Testbench                    |
-       |                      (tb/tb_main.cpp)                       |
-       +------------------------------+------------------------------+
-                                      |
-              +-----------------------+-----------------------+
-              |                                               |
-              v                                               v
-    [ Golden Reference ]                            [ Refactored Gateware ]
-      Vpistorm_golden                                      Vpistorm
-              |                                               |
-              +-----------------------+-----------------------+
-                                      |
-                                      v
-                       Side-by-Side Comparison
-                       - Cycle Count Check (Delta = 0)
-                       - Throughput & Latency Measurement
-                       - 331 Assertions
+```mermaid
+flowchart TD
+    TB["<b>Verilator C++ Testbench</b><br/>(tb/tb_main.cpp)"]
+    
+    TB --> GOLDEN["<b>Golden Reference</b><br/>Vpistorm_golden<br/><i>(Unmodified Upstream)</i>"]
+    TB --> REFACTOR["<b>Refactored Gateware</b><br/>Vpistorm<br/><i>(Ultra-Turbo & Prefetch)</i>"]
+    
+    GOLDEN --> COMP["<b>Side-by-Side Comparison</b><br/>• Cycle Count Check (Delta = 0)<br/>• Throughput & Latency Measurement<br/>• 338 Assertions Passing"]
+    REFACTOR --> COMP
 ```
 
 ---
@@ -33,7 +23,7 @@ This verifies that new features introduce no timing regressions on standard Amig
 
 | File | Role |
 | :--- | :--- |
-| `tb/tb_main.cpp` | Main simulation driver, 15 test suites, 331 assertions, benchmark reporting |
+| `tb/tb_main.cpp` | Main simulation driver, 15 test suites, 338 assertions, benchmark reporting |
 | `tb/amiga_bus_model.h/.cpp` | Cycle-accurate A1200 motherboard model (Alice 560ns slot, chipset wait states, DSACK) |
 | `tb/ps_pi_model.h/.cpp` | Raspberry Pi host model (parallel GPIO bus, 2-slot queue, prefetch testing) |
 | `tb/m68k_timing_checker.h/.cpp` | Checks 68020 setup/hold times and bus protocol rules |
@@ -45,7 +35,7 @@ This verifies that new features introduce no timing regressions on standard Amig
 ## 2. Running Tests
 
 ```bash
-# Run full test suite (331 assertions + golden reference comparison)
+# Run full test suite (338 assertions + golden reference comparison)
 make test
 
 # Run standalone benchmark suite and side-by-side performance table
@@ -60,7 +50,7 @@ make trace
 ## 3. Test Suites
 
 1. **Reset & Initialization:** Power-on state, PLL lock sync, bus tri-stating.
-2. **Basic M68k Cycles:** 8, 16, and 32-bit single transfers.
+2. **Basic M68k Cycles:** 8, 16, and 32-bit single transfers (including Test 2.1: Micronik `MC_BG_n` pull-down bus master verification).
 3. **Dynamic Bus Sizing:** 8, 16, and 32-bit DSACK handshaking and wait states.
 4. **Bus Error & Autovector:** Unmapped access, timeout aborts, and BERR.
 5. **Pi SMI Protocol:** Parallel register reads/writes and status flags.
@@ -72,7 +62,7 @@ make trace
 11. **Amiga Interrupts:** Level 2 (INT2) and Level 6 (INT6) assertion, masking, and clear.
 12. **ESP32 GPIO Matrix:** Direct I/O, atomic SET/CLR/TOGGLE, input/output muxing.
 13. **Clock Ringing Immunity:** Injects 1.8V dips on falling `MC_CLK` edges to test lockout filter.
-14. **Timing Checker:** Protocol and setup/hold verification.
+14. **Timing Checker:** Protocol, setup/hold verification, and Wishbone Slave 0 `BUS_CTRL` / hardware diagnostic profilers (Test 14.7).
 15. **Golden Reference Comparison:** Co-simulation against `Vpistorm_golden`.
 
 ---
@@ -117,6 +107,9 @@ sequenceDiagram
     DSACK-->>FSM: DSACK returns HIGH
 ```
 
+**Simulation Waveform (WaveDrom SVG):**
+![68020 Fast DSACK Read Waveform](waveforms/m68k_read_cycle.svg)
+
 ---
 
 ### 4.2 68020 Pipelined Write Cycle (2-Slot)
@@ -151,6 +144,9 @@ sequenceDiagram
     Note over Host,FSM: Slot 0 finishes; Slot 1 starts immediately with 0 idle cycles
 ```
 
+**Simulation Waveform (WaveDrom SVG):**
+![68020 Fast DSACK Write Waveform](waveforms/m68k_write_cycle.svg)
+
 ---
 
 ### 4.3 Wishbone B4 Internal Access ($00E90000)
@@ -175,6 +171,9 @@ sequenceDiagram
     end
 ```
 
+**Simulation Waveform (WaveDrom SVG):**
+![Wishbone Bus Cycle Waveform](waveforms/wishbone_bus_cycle.svg)
+
 ---
 
 ### 4.4 Lockout Filter (1.8V Ringing Suppression)
@@ -198,9 +197,31 @@ sequenceDiagram
     Note over Out: Dip is suppressed; filtered clock stays clean LOW
 ```
 
+**Simulation Waveform (WaveDrom SVG):**
+![Clock Glitch Filter Waveform](waveforms/clock_glitch_filter.svg)
+
 ---
 
-## 5. Waveform Viewing (GTKWave)
+### 4.5 Speculative Prefetch Cache Hit (0 Wait States)
+
+The host Pi requests address $A+4$ after a sequential read. Because the FPGA speculatively prefetched the word into its internal buffer, the transfer completes immediately in a single clock cycle with **0 wait states** and **0 physical Amiga motherboard cycles** (`MC_AS_n` remains idle/tri-stated):
+
+**Simulation Waveform (WaveDrom SVG):**
+![Speculative Prefetch Cache Hit Waveform](waveforms/prefetch_cache_hit.svg)
+
+---
+
+## 5. Waveform Generation & Viewing
+
+### Extracting & Rendering WaveDrom SVG Diagrams
+You can automatically extract key simulation traces from `sim.vcd` and render vector SVG diagrams:
+```bash
+# Run simulation, extract traces, and render SVGs via wavedrom-cli
+make waveforms
+```
+The resulting SVGs and WaveJSON files are stored in `DOCS/waveforms/`.
+
+### Interactive Viewing (GTKWave)
 
 ```bash
 make trace
@@ -208,6 +229,6 @@ gtkwave sim.vcd
 ```
 
 Signals of interest:
-- Clocks: `TOP.pistorm.sys_clk`, `TOP.pistorm.MC_CLK`, `TOP.pistorm.m68k_inst.mc_clk_filtered`
-- Amiga Bus: `TOP.pistorm.m68k_inst.state`, `TOP.pistorm.MC_A`, `TOP.pistorm.DA_IN`, `TOP.pistorm.MC_AS_n`, `TOP.pistorm.MC_DSACK_n`
-- Wishbone: `TOP.pistorm.wb_cyc`, `TOP.pistorm.wb_stb`, `TOP.pistorm.wb_we`, `TOP.pistorm.wb_adr`, `TOP.pistorm.wb_dat_w`, `TOP.pistorm.wb_ack`
+- Clocks: `TOP.pistorm.sys_clk`, `TOP.pistorm.MC_CLK`, `TOP.pistorm.u_m68k.mc_clk_filtered`
+- Amiga Bus: `TOP.pistorm.u_m68k.state`, `TOP.pistorm.MC_A`, `TOP.pistorm.DA_IN`, `TOP.pistorm.MC_AS_n_OUT`, `TOP.pistorm.MC_DSACK_n`
+- Wishbone: `TOP.pistorm.wb_cyc`, `TOP.pistorm.wb_stb`, `TOP.pistorm.wb_we`, `TOP.pistorm.wb_adr`, `TOP.pistorm.wb_dat_m2s`, `TOP.pistorm.wb_ack`

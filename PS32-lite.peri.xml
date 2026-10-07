@@ -215,7 +215,7 @@
             <efxpt:input_config name="MC_BERR_n" name_ddio_lo="" conn_type="normal" is_register="false" clock_name="AMIPLL_CLKOUT0" is_clock_inverted="false" pull_option="weak pullup" is_schmitt_trigger="true" ddio_type="none" />
         </efxpt:gpio>
         <efxpt:gpio name="MC_BG_n" gpio_def="GPIOR_85" mode="input" bus_name="" is_lvds_gpio="false" io_standard="3.3 V LVTTL / LVCMOS">
-            <efxpt:input_config name="MC_BG_n" name_ddio_lo="" conn_type="normal" is_register="false" clock_name="AMIPLL_CLKOUT0" is_clock_inverted="false" pull_option="weak pullup" is_schmitt_trigger="true" ddio_type="none" />
+            <efxpt:input_config name="MC_BG_n" name_ddio_lo="" conn_type="normal" is_register="false" clock_name="AMIPLL_CLKOUT0" is_clock_inverted="false" pull_option="weak pulldown" is_schmitt_trigger="true" ddio_type="none" />
         </efxpt:gpio>
         <efxpt:gpio name="MC_BR_n" gpio_def="GPIOR_86" mode="inout" bus_name="" is_lvds_gpio="false" io_standard="3.3 V LVTTL / LVCMOS">
             <efxpt:input_config name="MC_BR_n_IN" name_ddio_lo="" conn_type="normal" is_register="false" clock_name="AMIPLL_CLKOUT0" is_clock_inverted="false" pull_option="weak pullup" is_schmitt_trigger="true" ddio_type="none" />

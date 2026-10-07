@@ -34,8 +34,24 @@ Base address offsets (relative to configured base, e.g. `$00E90000`):
 
 ## 3. Peripheral Registers
 
-### Slave 0: Scratchpad SRAM (`+$0000`–`+$0FFF`)
+### Slave 0: Scratchpad SRAM & Hardware Profilers (`+$0000`–`+$0FFF`)
 4 KB dual-port SRAM accessible by both the Amiga CPU and Raspberry Pi with 0 wait states. Supports 8, 16, and 32-bit reads and writes.
+
+#### Bus Control & Hardware Diagnostic Registers:
+
+| Offset | Name | R/W | Description |
+| :---: | :--- | :---: | :--- |
+| `+$000C` | `SCRATCHPAD_REG` | R/W | 32-bit R/W scratchpad test register |
+| `+$0010` | `INT_STATUS` | R/W1C | Interrupt status (Bit 0: INT2, Bit 1: INT6) |
+| `+$0014` | `INT_ENABLE` | R/W | Interrupt enable mask (Bit 0: INT2, Bit 1: INT6) |
+| `+$0018` | `INT_FORCE` | W | Force interrupt trigger (Bit 0: INT2, Bit 1: INT6) |
+| `+$001C` | `BUS_CTRL` | R/W | **Turbo & Bus Engine Control:**<br/>- Bit 0: `prefetch_ctrl_en` (32-bit speculative prefetch)<br/>- Bit 1: `fast_dsack_en` (Fast DSACK termination)<br/>- Bit 2: `cck_sync_en` (7.09 MHz CCK phase synchronization)<br/>- Bit 3: `force_phase_invert` (Manual CCK phase invert)<br/>- Bit 4: `phase_calibrated` (Status: 1 = Phase locked)<br/>- Bit 5: `fast_read_phase_cal` (Status: calibrated fast read phase)<br/>- Bit 6: `current_cck_phase` (Status: live CCK toggle)<br/>- Bit 7: `enable_word_prefetch` (16-bit word prefetching) |
+| `+$0020` | `DIAG_STATUS` | R | Live FSM and prefetch pipeline status word |
+| `+$0024` | `PREFETCH_LAUNCH_COUNT` | R/W | Speculative prefetch launch counter (write clears) |
+| `+$0028` | `PREFETCH_HIT_COUNT` | R/W | Speculative prefetch cache hit counter (write clears) |
+| `+$002C` | `DIAG_BUS_CAPTURE` | R | Last physical bus cycle capture (address, size, DSACK at termination) |
+| `+$0030` | `DIAG_CYCLE_TIMING` | R | High-resolution cycle timing profile (182 MHz ticks of /AS width, /AS->/DSACK latency, lead ticks, 14 MHz wait states) |
+| `+$0034` | `DIAG_CLOCK_PHASE` | R | 14 MHz motherboard clock period and high/low duty cycle metrics in 5.5 ns ticks |
 
 ### Slave 1: SPI / Coprocessor Mailbox (`+$1000`–`+$101F`)
 

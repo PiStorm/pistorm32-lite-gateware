@@ -549,6 +549,11 @@ int main(int argc, char **argv) {
         CloseLibrary((struct Library *)ExpansionBase);
     }
 
+    if (argc > 1 && (strcmp(argv[1], "--status") == 0 || strcmp(argv[1], "-s") == 0)) {
+        cleanup_timer();
+        return 0;
+    }
+
     if (argc > 1 && strcmp(argv[1], "--ctrl") == 0 && argc > 2) {
         if (!zorro_dev) {
             printf("Error: Virtual Zorro board not detected!\n");
@@ -650,10 +655,11 @@ int main(int argc, char **argv) {
             {"Mode 4: Fast DSACK + CCK Sync (FastDSACK=ON, CCKSync=ON, Prefetch=OFF)", 0x06},
             {"Mode 5: Prefetch Only (FastDSACK=OFF, CCKSync=OFF, Prefetch=ON)", 0x01},
             {"Mode 6: Turbo (FastDSACK=ON, CCKSync=OFF, Prefetch=ON)", 0x03},
-            {"Mode 7: Ultra Turbo (FastDSACK=ON, CCKSync=ON, Prefetch=ON)", 0x07}
+            {"Mode 7: Ultra Turbo (FastDSACK=ON, CCKSync=ON, Prefetch=ON)", 0x07},
+            {"Mode 8: Ultra Turbo + 16-Bit Word Prefetch", 0x87}
         };
 
-        for (int m = 0; m < 7; m++) {
+        for (int m = 0; m < 8; m++) {
             zorro_dev[ZREG_PREF_CTRL / 4] = modes[m].ctrl;
             zorro_dev[ZREG_PREF_LAUNCH / 4] = 0; // Clear counters
 

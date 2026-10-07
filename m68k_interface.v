@@ -598,22 +598,23 @@ module m68k_interface (
             diag_term_wait_states <= cyc_wait_states;
             diag_dsack_lead_ticks <= lead_acc;
 
-            // Auto-calibrate optimal CCK phase from the first Chip RAM cycle ($000000..$1FFFFF)
+            // Robust CCK Phase Auto-Calibration for Chip RAM ($000000..$1FFFFF)
+            // Alice's fastest slots: Write = 5 wait states (456 ns), Read = 6 wait states (527 ns).
+            // A cycle can NEVER complete in <= 5 (write) or <= 6 (read) wait states on the wrong phase.
+            // Slow cycles (> 5 write, > 6 read) can occur on either phase due to Alice DMA.
+            // Therefore, ONLY clean, fast cycles are used to calibrate the phase.
             if (address[23:21] == 3'b000) begin
                 if (!r_phase_calibrated) begin
-                    r_phase_calibrated <= 1'b1;
-                    if (rw) begin
-                        // READ: Fast is <= 7 wait states (6 wait states)
-                        if (cyc_wait_states <= 4'd7)
-                            r_fast_read_phase <= as_start_phase;
-                        else
-                            r_fast_read_phase <= ~as_start_phase;
-                    end else begin
-                        // WRITE: Fast is <= 6 wait states (5 wait states)
-                        if (cyc_wait_states <= 4'd6)
-                            r_fast_read_phase <= ~as_start_phase; // opposite of write
-                        else
-                            r_fast_read_phase <= as_start_phase;
+                    if (!rw && (cyc_wait_states <= 4'd5)) begin
+                        // Clean 5-wait-state write detected on as_start_phase.
+                        // Optimal read phase is the opposite phase (~as_start_phase).
+                        r_fast_read_phase  <= ~as_start_phase;
+                        r_phase_calibrated <= 1'b1;
+                    end else if (rw && (cyc_wait_states <= 4'd6)) begin
+                        // Clean 6-wait-state read detected on as_start_phase.
+                        // Optimal read phase is the same phase (as_start_phase).
+                        r_fast_read_phase  <= as_start_phase;
+                        r_phase_calibrated <= 1'b1;
                     end
                 end
             end

@@ -1,0 +1,54 @@
+{
+  "signal": [
+    {
+      "name": "sys_clk (182 MHz)",
+      "wave": "pppppppppppppppp"
+    },
+    {
+      "name": "MC_CLK (14.18 MHz)",
+      "wave": "1.0....1....0..."
+    },
+    {
+      "name": "FSM State",
+      "wave": "=......=........",
+      "data": [
+        "S0_IDLE",
+        "S0_START"
+      ]
+    },
+    {
+      "name": "Requested Address",
+      "wave": "=......=........",
+      "data": [
+        "0x1004",
+        "0x1008"
+      ]
+    },
+    {
+      "name": "Prefetch Tag Match (Hit)",
+      "wave": "0.....10........"
+    },
+    {
+      "name": "prefetch_hit_terminate (0-WS)",
+      "wave": "0.....10........"
+    },
+    {
+      "name": "Amiga MC_AS_n (0 Bus Cycles)",
+      "wave": "1..............."
+    },
+    {
+      "name": "Returned Data (Prefetch Buffer)",
+      "wave": "=...............",
+      "data": [
+        "0x0"
+      ]
+    }
+  ],
+  "head": {
+    "text": "Speculative Prefetch Cache Hit (0 Wait States, 0 Bus Cycles)",
+    "tick": 0
+  },
+  "config": {
+    "hscale": 1
+  }
+}
