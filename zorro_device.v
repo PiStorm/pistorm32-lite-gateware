@@ -53,7 +53,10 @@ module zorro_device #(
     input  wire [31:0] prefetch_hit_count,
     input  wire [31:0] diag_status,
     input  wire [31:0] diag_bus_capture,
+    input  wire [31:0] diag_cycle_timing,
+    input  wire [31:0] diag_clock_phase,
     output reg         prefetch_ctrl_en = 1'b1,
+    output reg         fast_dsack_en = 1'b0,
     output reg         counter_clear = 1'b0
 );
 
@@ -391,6 +394,7 @@ module zorro_device #(
             int2_enable      <= 1'b0;
             int6_enable      <= 1'b0;
             prefetch_ctrl_en <= 1'b1;
+            fast_dsack_en    <= 1'b0;
             counter_clear    <= 1'b0;
         end else begin
             s0_ack_reg    <= 1'b0;
@@ -408,11 +412,13 @@ module zorro_device #(
                     5'h04: s0_reg_data <= {27'd0, s2_irq, s1_irq, 1'b0, int6_pending, int2_pending};
                     5'h05: s0_reg_data <= {30'd0, int6_enable, int2_enable};
                     5'h06: s0_reg_data <= 32'd0;
-                    5'h07: s0_reg_data <= {31'd0, prefetch_ctrl_en}; // +$1C: PREFETCH_CTRL
+                    5'h07: s0_reg_data <= {30'd0, fast_dsack_en, prefetch_ctrl_en}; // +$1C: PREFETCH_CTRL / BUS_CTRL
                     5'h08: s0_reg_data <= diag_status;               // +$20: DIAG_STATUS
                     5'h09: s0_reg_data <= prefetch_launch_count;     // +$24: PREFETCH_LAUNCH_COUNT
                     5'h0A: s0_reg_data <= prefetch_hit_count;        // +$28: PREFETCH_HIT_COUNT
                     5'h0B: s0_reg_data <= diag_bus_capture;          // +$2C: DIAG_BUS_CAPTURE
+                    5'h0C: s0_reg_data <= diag_cycle_timing;        // +$30: DIAG_CYCLE_TIMING
+                    5'h0D: s0_reg_data <= diag_clock_phase;         // +$34: DIAG_CLOCK_PHASE
                     default: s0_reg_data <= 32'd0;
                 endcase
 
@@ -443,8 +449,11 @@ module zorro_device #(
                                 if (wb_dat_m2s[1]) int6_pending <= 1'b1;
                             end
                         end
-                        5'h07: begin // PREFETCH_CTRL: Read/Write (+$1C)
-                            if (wb_sel[0]) prefetch_ctrl_en <= wb_dat_m2s[0];
+                        5'h07: begin // PREFETCH_CTRL / BUS_CTRL: Read/Write (+$1C)
+                            if (wb_sel[0]) begin
+                                prefetch_ctrl_en <= wb_dat_m2s[0];
+                                fast_dsack_en    <= wb_dat_m2s[1];
+                            end
                         end
                         5'h09, 5'h0A: begin // Counter clear trigger on write to +$24 or +$28
                             counter_clear <= 1'b1;

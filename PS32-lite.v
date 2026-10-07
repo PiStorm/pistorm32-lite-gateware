@@ -161,7 +161,10 @@ wire [31:0] prefetch_launch_count;
 wire [31:0] prefetch_hit_count;
 wire [31:0] diag_status;
 wire [31:0] diag_bus_capture;
+wire [31:0] diag_cycle_timing;
+wire [31:0] diag_clock_phase;
 wire        prefetch_ctrl_en;
+wire        fast_dsack_en;
 wire        counter_clear;
 
 // 1. Raspberry Pi Interface Submodule
@@ -271,7 +274,10 @@ zorro_device #(
     .prefetch_hit_count   (prefetch_hit_count),
     .diag_status          (diag_status),
     .diag_bus_capture     (diag_bus_capture),
+    .diag_cycle_timing    (diag_cycle_timing),
+    .diag_clock_phase     (diag_clock_phase),
     .prefetch_ctrl_en     (prefetch_ctrl_en),
+    .fast_dsack_en        (fast_dsack_en),
     .counter_clear        (counter_clear)
 );
 
@@ -380,7 +386,10 @@ m68k_interface u_m68k (
     .prefetch_hit_count             (prefetch_hit_count),
     .diag_status                    (diag_status),
     .diag_bus_capture               (diag_bus_capture),
+    .diag_cycle_timing              (diag_cycle_timing),
+    .diag_clock_phase               (diag_clock_phase),
     .prefetch_ctrl_en               (prefetch_ctrl_en),
+    .fast_dsack_en                  (fast_dsack_en),
     .counter_clear                  (counter_clear)
 );
 

@@ -27,7 +27,9 @@ static ULONG eclock_freq = 0;
 #define ZREG_DIAG_STATUS 0x20
 #define ZREG_PREF_LAUNCH 0x24
 #define ZREG_PREF_HIT    0x28
-#define ZREG_BUS_CAPTURE 0x2C
+#define ZREG_BUS_CAPTURE  0x2C
+#define ZREG_CYCLE_TIMING 0x30
+#define ZREG_CLOCK_PHASE  0x34
 
 static volatile ULONG *zorro_dev = NULL;
 
@@ -38,6 +40,8 @@ static void print_diag_status(const char *label) {
     ULONG hits = zorro_dev[ZREG_PREF_HIT / 4];
     ULONG pref_ctrl = zorro_dev[ZREG_PREF_CTRL / 4];
     ULONG bus_cap = zorro_dev[ZREG_BUS_CAPTURE / 4];
+    ULONG timing = zorro_dev[ZREG_CYCLE_TIMING / 4];
+    ULONG clk_phase = zorro_dev[ZREG_CLOCK_PHASE / 4];
 
     int halt_sync      = (st >> 31) & 1;
     int reset_sync     = (st >> 30) & 1;
@@ -72,6 +76,23 @@ static void print_diag_status(const char *label) {
     ULONG dsack_trm = (bus_cap >> 2) & 3;
     ULONG live_dsk  = bus_cap & 3;
 
+    ULONG as_total_ticks    = (timing >> 22) & 0x3FF;
+    ULONG as_to_dsack_ticks = (timing >> 12) & 0x3FF;
+    ULONG wait_states_14m   = (timing >> 8) & 0xF;
+    ULONG dsack_lead_ticks  = (timing >> 4) & 0xF;
+    int dsack_at_high       = (timing >> 3) & 1;
+    int as_start_phase      = (timing >> 2) & 1;
+    int timing_rw           = (timing >> 1) & 1;
+
+    ULONG clk_period_ticks = (clk_phase >> 16) & 0xFF;
+    ULONG clk_high_ticks   = (clk_phase >> 8) & 0xFF;
+    ULONG clk_low_ticks    = clk_phase & 0xFF;
+
+    ULONG as_total_ns    = (as_total_ticks * 5495UL) / 1000UL;
+    ULONG as_to_dsack_ns = (as_to_dsack_ticks * 5495UL) / 1000UL;
+    ULONG lead_ns        = (dsack_lead_ticks * 5495UL) / 1000UL;
+    ULONG dead_time_ns   = (as_total_ns > as_to_dsack_ns) ? (as_total_ns - as_to_dsack_ns) : 0;
+
     const char *pw_str = (port_width == 3) ? "32-bit" : (port_width == 1) ? "16-bit" : (port_width == 0) ? "8-bit" : "unknown";
     const char *pw_s5_str = (pw_s5 == 3) ? "32-bit" : (pw_s5 == 1) ? "16-bit" : (pw_s5 == 0) ? "8-bit" : "unknown";
 
@@ -89,6 +110,18 @@ static void print_diag_status(const char *label) {
            cyc_cnt, addr_lo, last_rw ? "READ" : "WRITE", last_norm, last_sz_le, term_elig);
     printf("      PortAtS5=%s (%lu) | SizeAtS5=%lu | /DSACK: @Term=0x%lX, @S4=0x%lX, @S5=0x%lX, Live=0x%lX\n",
            pw_s5_str, pw_s5, size_s5, dsack_trm, dsack_s4, dsack_s5, live_dsk);
+    printf("    Cycle Timing Profile (+$30 = 0x%08lX):\n", timing);
+    printf("      Total /AS Width: %lu ticks (~%lu ns) | /AS->/DSACK Latency: %lu ticks (~%lu ns)\n",
+           as_total_ticks, as_total_ns, as_to_dsack_ticks, as_to_dsack_ns);
+    printf("      Post-DSACK Dead Time: ~%lu ns | 14MHz Wait States: %lu cycles (~%lu ns)\n",
+           dead_time_ns, wait_states_14m, wait_states_14m * 70UL);
+    printf("      Raw /DSACK Arrival: %s | Lead Time to Fall: %lu ticks (~%lu ns) | CCK Phase: %d\n",
+           dsack_at_high ? "HIGH (Phase S4/S2)" : "LOW (Phase S3/S1)", dsack_lead_ticks, lead_ns, as_start_phase);
+    printf("    Motherboard 14MHz Clock Profile (+$34 = 0x%08lX):\n", clk_phase);
+    printf("      Period: %lu ticks (~%lu ns) | High: %lu ticks (~%lu ns) | Low: %lu ticks (~%lu ns)\n",
+           clk_period_ticks, (clk_period_ticks * 5495UL) / 1000UL,
+           clk_high_ticks, (clk_high_ticks * 5495UL) / 1000UL,
+           clk_low_ticks, (clk_low_ticks * 5495UL) / 1000UL);
 }
 
 static int init_timer(void) {
@@ -433,6 +466,43 @@ static void run_mem_tests(const char *name, ULONG *buf, int is_chip) {
     }
 }
 
+static void profile_cycles(volatile ULONG *chip_ptr, const char *title, ULONG ctrl_val) {
+    if (!zorro_dev) return;
+    printf("--- %s (Ctrl = 0x%02lX) ---\n", title, ctrl_val);
+    printf(" Cyc | Type  | CCK Phase | /AS Width | /AS->DSACK | WaitStates | LeadTicks | Post-DSACK\n");
+    printf("-----+-------+-----------+-----------+------------+------------+-----------+-----------\n");
+    zorro_dev[ZREG_PREF_CTRL / 4] = ctrl_val;
+
+    for (int i = 0; i < 8; i++) {
+        const char *type = (i % 2 == 0) ? "READ" : "WRITE";
+        if (i % 2 == 0) {
+            volatile ULONG r = chip_ptr[i * 8]; // Read from offset
+            (void)r;
+        } else {
+            chip_ptr[i * 8] = 0xAA550000 | i;  // Write to offset
+        }
+        ULONG timing = zorro_dev[ZREG_CYCLE_TIMING / 4];
+        ULONG as_total_ticks    = (timing >> 22) & 0x3FF;
+        ULONG as_to_dsack_ticks = (timing >> 12) & 0x3FF;
+        ULONG wait_states_14m   = (timing >> 8) & 0xF;
+        ULONG dsack_lead_ticks  = (timing >> 4) & 0xF;
+        int as_start_phase      = (timing >> 2) & 1;
+        ULONG as_total_ns    = (as_total_ticks * 5495UL) / 1000UL;
+        ULONG as_to_dsack_ns = (as_to_dsack_ticks * 5495UL) / 1000UL;
+        ULONG dead_time_ns   = (as_total_ns > as_to_dsack_ns) ? (as_total_ns - as_to_dsack_ns) : 0;
+
+        printf("  %2d | %5s |     %d     | %4luns (%3lut) | %4luns (%3lut) |  %2lu cycles |   %2lut   |  ~%luns\n",
+               i, type, as_start_phase, as_total_ns, as_total_ticks, as_to_dsack_ns, as_to_dsack_ticks,
+               wait_states_14m, dsack_lead_ticks, dead_time_ns);
+    }
+    printf("\n");
+}
+
+static void test_phase_alignment(volatile ULONG *chip_ptr) {
+    profile_cycles(chip_ptr, "Standard Mode (Upstream Golden Parity: FastDSACK=OFF, Prefetch=OFF)", 0x00);
+    profile_cycles(chip_ptr, "Fast DSACK Mode (FastDSACK=ON, Prefetch=OFF)", 0x02);
+}
+
 int main(int argc, char **argv) {
     printf("============================================================\n");
     printf("  PiStorm32-lite Comprehensive Bus & Prefetch Benchmark\n");
@@ -478,7 +548,20 @@ int main(int argc, char **argv) {
         CloseLibrary((struct Library *)ExpansionBase);
     }
 
-    // Allocate Buffers
+    if (argc > 1 && strcmp(argv[1], "--ctrl") == 0 && argc > 2) {
+        if (!zorro_dev) {
+            printf("Error: Virtual Zorro board not detected!\n");
+            cleanup_timer();
+            return 20;
+        }
+        ULONG val = strtoul(argv[2], NULL, 0);
+        zorro_dev[ZREG_PREF_CTRL / 4] = val;
+        printf("[CONTROL] PREFETCH_CTRL set to 0x%08lX (Prefetch=%d, FastDSACK=%d)\n",
+               val, (int)(val & 1), (int)((val >> 1) & 1));
+        cleanup_timer();
+        return 0;
+    }
+
     ULONG *chip_buf = (ULONG *)AllocMem(BUF_SIZE, MEMF_CHIP | MEMF_CLEAR);
     if (!chip_buf) {
         printf("FATAL: Failed to allocate 256 KB of Chip RAM!\n");
@@ -517,6 +600,29 @@ int main(int argc, char **argv) {
                launch_after_hit, hit_after_hit, st_after_hit);
         print_diag_status("After Single Prefetch Test");
         printf("\n");
+
+        printf("--- Physical Bus Cycle Timing Profiler ---\n");
+        // 1. Single 32-bit Write to Chip RAM
+        chip_ptr[10] = 0x12345678;
+        print_diag_status("Single 32-bit Write to Chip RAM");
+
+        // 2. Single 32-bit Read from Chip RAM with Prefetch OFF
+        zorro_dev[ZREG_PREF_CTRL / 4] = 0; // Disable prefetch
+        volatile ULONG val_nopref = chip_ptr[20];
+        print_diag_status("Single 32-bit Read from Chip RAM (Prefetch OFF)");
+
+        // 3. Single 32-bit Read from Chip RAM with Prefetch ON
+        zorro_dev[ZREG_PREF_CTRL / 4] = 1; // Enable prefetch
+        volatile ULONG val_pref1 = chip_ptr[30];
+        for (volatile int i = 0; i < 200; i++); // Wait for prefetch
+        volatile ULONG val_pref2 = chip_ptr[31]; // Prefetch hit!
+        print_diag_status("Sequential 32-bit Read (Prefetch HIT)");
+
+        // 4. Single 16-bit Read from Amiga Custom Register (VPOSR $DFF004)
+        volatile UWORD *custom_reg = (volatile UWORD *)0x00DFF004;
+        volatile UWORD vpos = *custom_reg;
+        print_diag_status("16-bit Read from Custom Chipset ($DFF004 VPOSR)");
+        test_phase_alignment(chip_ptr);
     }
 
     ULONG *fast_buf = (ULONG *)AllocMem(BUF_SIZE, MEMF_FAST | MEMF_CLEAR);
@@ -527,6 +633,51 @@ int main(int argc, char **argv) {
 
     // Run Chip RAM tests
     run_mem_tests("CHIP RAM", chip_buf, 1);
+
+    if (zorro_dev) {
+        printf("\n============================================================\n");
+        printf("  Operating Mode Comparison on CHIP RAM (256 KB)\n");
+        printf("============================================================\n");
+
+        static const struct {
+            const char *name;
+            ULONG ctrl;
+        } modes[] = {
+            {"Mode 1: Baseline (FastDSACK=OFF, Prefetch=OFF)", 0x00},
+            {"Mode 2: Fast DSACK Only (FastDSACK=ON, Prefetch=OFF)", 0x02},
+            {"Mode 3: Prefetch Only (FastDSACK=OFF, Prefetch=ON)", 0x01},
+            {"Mode 4: Full Turbo (FastDSACK=ON, Prefetch=ON)", 0x03}
+        };
+
+        for (int m = 0; m < 4; m++) {
+            zorro_dev[ZREG_PREF_CTRL / 4] = modes[m].ctrl;
+            zorro_dev[ZREG_PREF_LAUNCH / 4] = 0; // Clear counters
+
+            ULONG t0 = get_eclock();
+            bench_readl_seq(chip_buf, NUM_OPS_32);
+            ULONG t1 = get_eclock();
+
+            ULONG t2 = get_eclock();
+            bench_writel_seq(chip_buf, NUM_OPS_32);
+            ULONG t3 = get_eclock();
+
+            ULONG dt_rd = t1 - t0;
+            ULONG dt_wr = t3 - t2;
+            char s_rd_ns[32], s_rd_mb[32], s_wr_ns[32], s_wr_mb[32];
+            fmt_ns(s_rd_ns, dt_rd, NUM_OPS_32);
+            fmt_mbs(s_rd_mb, dt_rd, BUF_SIZE);
+            fmt_ns(s_wr_ns, dt_wr, NUM_OPS_32);
+            fmt_mbs(s_wr_mb, dt_wr, BUF_SIZE);
+
+            ULONG launches = zorro_dev[ZREG_PREF_LAUNCH / 4];
+            ULONG hits = zorro_dev[ZREG_PREF_HIT / 4];
+
+            printf("  [%s]\n", modes[m].name);
+            printf("    Read:  %7s ns/op | %6s MB/s (Hits: %5lu / %5lu)\n", s_rd_ns, s_rd_mb, hits, launches);
+            printf("    Write: %7s ns/op | %6s MB/s\n", s_wr_ns, s_wr_mb);
+        }
+        printf("============================================================\n\n");
+    }
 
     // Run Fast RAM tests (if available)
     if (fast_buf) {

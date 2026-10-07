@@ -129,7 +129,10 @@ module m68k_interface (
     output wire [31:0] prefetch_hit_count,
     output wire [31:0] diag_status,
     output wire [31:0] diag_bus_capture,
+    output wire [31:0] diag_cycle_timing,
+    output wire [31:0] diag_clock_phase,
     input  wire        prefetch_ctrl_en,
+    input  wire        fast_dsack_en,
     input  wire        counter_clear
 );
 
@@ -482,6 +485,106 @@ module m68k_interface (
         state[9:0]
     };
 
+    // =========================================================================
+    // SECTION 6B: Hardware Bus Cycle Timing Analyzer & Clock Profiler
+    // =========================================================================
+    reg [11:0] cyc_timer            = 12'd0;
+    reg [11:0] diag_as_to_dsack     = 12'd0;
+    reg [11:0] diag_as_total        = 12'd0;
+    reg [7:0]  diag_dsack_lead_ticks= 8'd0;
+    reg [3:0]  diag_term_wait_states= 4'd0;
+    reg [3:0]  cyc_wait_states      = 4'd0;
+    reg        cyc_dsack_seen       = 1'b0;
+    reg        diag_dsack_at_high   = 1'b0;
+    reg [7:0]  lead_acc             = 8'd0;
+    reg        cck_phase_toggle     = 1'b0;
+    reg        as_start_phase       = 1'b0;
+
+    // 14 MHz Clock Period & Duty Cycle Measurer
+    reg [7:0] mc_clk_period_ticks = 8'd0;
+    reg [7:0] mc_clk_high_ticks   = 8'd0;
+    reg [7:0] mc_clk_low_ticks    = 8'd0;
+    reg [7:0] r_period_acc        = 8'd0;
+    reg [7:0] r_high_acc          = 8'd0;
+    reg [7:0] r_low_acc           = 8'd0;
+
+    always @(posedge clk) begin
+        if (rising) begin
+            cck_phase_toggle    <= ~cck_phase_toggle;
+            mc_clk_period_ticks <= r_period_acc;
+            mc_clk_low_ticks    <= r_low_acc;
+            r_period_acc        <= 8'd1;
+            r_high_acc          <= 8'd1;
+            r_low_acc           <= 8'd0;
+        end else if (falling) begin
+            mc_clk_high_ticks   <= r_high_acc;
+            r_period_acc        <= r_period_acc + 8'd1;
+            r_low_acc           <= 8'd1;
+        end else begin
+            if (r_period_acc < 8'hFF) r_period_acc <= r_period_acc + 8'd1;
+            if (mc_clk_filtered) begin
+                if (r_high_acc < 8'hFF) r_high_acc <= r_high_acc + 8'd1;
+            end else begin
+                if (r_low_acc < 8'hFF)  r_low_acc  <= r_low_acc + 8'd1;
+            end
+        end
+
+        // Bus cycle duration & DSACK timing profiler
+        if (state[STATE_BIT_WAIT_ASSERT_AS]) begin
+            cyc_timer       <= 12'd0;
+            cyc_dsack_seen  <= 1'b0;
+            cyc_wait_states <= 4'd0;
+            lead_acc        <= 8'd0;
+            as_start_phase  <= cck_phase_toggle;
+        end else if (mc_as) begin
+            if (cyc_timer < 12'hFFF)
+                cyc_timer <= cyc_timer + 12'd1;
+
+            // Detect raw /DSACK assertion on pins (independent of falling edge)
+            if (!cyc_dsack_seen && (MC_DSACK_n != 2'b11 || !MC_BERR_n)) begin
+                cyc_dsack_seen     <= 1'b1;
+                diag_as_to_dsack   <= cyc_timer;
+                diag_dsack_at_high <= mc_clk_filtered;
+            end
+
+            // Accumulate lead ticks from raw DSACK until next falling edge
+            if (cyc_dsack_seen && !falling && (lead_acc < 8'hFF)) begin
+                lead_acc <= lead_acc + 8'd1;
+            end
+
+            // Count Amiga 14 MHz falling edges spent in WAIT_TERMINATION
+            if (state[STATE_BIT_WAIT_TERMINATION] && falling) begin
+                if (cyc_wait_states < 4'hF)
+                    cyc_wait_states <= cyc_wait_states + 4'd1;
+            end
+        end
+
+        // Capture end of cycle when /AS is negated (falling edge in WAIT_LATCH_DATA)
+        if (state[STATE_BIT_WAIT_LATCH_DATA] && falling) begin
+            diag_as_total         <= cyc_timer;
+            diag_term_wait_states <= cyc_wait_states;
+            diag_dsack_lead_ticks <= lead_acc;
+        end
+    end
+
+    assign diag_cycle_timing = {
+        diag_as_total[9:0],         // [31:22] Total /AS width in 182 MHz clk (each 5.5 ns, up to 5.6 us)
+        diag_as_to_dsack[9:0],      // [21:12] /AS assertion to raw /DSACK low in 182 MHz clk
+        diag_term_wait_states[3:0], // [11:8]  14 MHz wait states in STATE_WAIT_TERMINATION
+        diag_dsack_lead_ticks[3:0], // [7:4]   Lead ticks of raw DSACK before falling edge (capped at 15)
+        diag_dsack_at_high,         // [3]     1 = DSACK arrived when MC_CLK was HIGH
+        as_start_phase,             // [2]     CCK alternating 14 MHz phase at /AS assert
+        diag_rw,                    // [1]     1 = Read, 0 = Write
+        any_termination             // [0]     Termination status
+    };
+
+    assign diag_clock_phase = {
+        diag_cycle_count[7:0],      // [31:24] Cycle sequence number
+        mc_clk_period_ticks[7:0],   // [23:16] Total 14 MHz period in 182 MHz clocks (~13)
+        mc_clk_high_ticks[7:0],     // [15:8]  High half period in 182 MHz clocks (~6-7)
+        mc_clk_low_ticks[7:0]       // [7:0]   Low half period in 182 MHz clocks (~6-7)
+    };
+
     // Prefetch Safety Filter:
     // Only prefetch from Chip-RAM ($000000..$1FFFFF) or Expansion RAM ($E00000..$FFFFFF).
     // NEVER speculatively prefetch from CIA ($BFExxx) or Custom Registers ($DFFxxx)!
@@ -720,7 +823,10 @@ module m68k_interface (
                 end
                 if (any_termination) begin
                     diag_dsack_at_term <= mc_dsack_n_sync;
-                    state <= STATE_S4_NOP;
+                    if (fast_dsack_en)
+                        state <= STATE_WAIT_LATCH_DATA;
+                    else
+                        state <= STATE_S4_NOP;
                 end
             end
 
