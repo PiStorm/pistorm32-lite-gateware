@@ -59,10 +59,10 @@ module zorro_device #(
     input  wire        fast_read_phase_cal,
     input  wire        current_cck_phase,
     output reg         prefetch_ctrl_en = 1'b1,
-    output reg         fast_dsack_en = 1'b0,
-    output reg         cck_sync_en = 1'b0,
+    output reg         fast_dsack_en = 1'b1,
+    output reg         cck_sync_en = 1'b1,
     output reg         force_phase_invert = 1'b0,
-    output reg         enable_word_prefetch = 1'b0,
+    output reg         enable_word_prefetch = 1'b1,
     output reg         counter_clear = 1'b0
 );
 
@@ -400,10 +400,10 @@ module zorro_device #(
             int2_enable      <= 1'b0;
             int6_enable      <= 1'b0;
             prefetch_ctrl_en     <= 1'b1;
-            fast_dsack_en        <= 1'b0;
-            cck_sync_en          <= 1'b0;
+            fast_dsack_en        <= 1'b1;
+            cck_sync_en          <= 1'b1;
             force_phase_invert   <= 1'b0;
-            enable_word_prefetch <= 1'b0;
+            enable_word_prefetch <= 1'b1;
             counter_clear        <= 1'b0;
         end else begin
             s0_ack_reg    <= 1'b0;
