@@ -65,35 +65,51 @@ make bitstream
 
 ## Flashing the FPGA
 
-EMU68 and PiStorm Linux automatically program the FPGA bitstream at boot over SPI bitbang using Raspberry Pi GPIOs:
+The ready-to-use bitstream is pre-compiled and tracked in the repository as [`firmware.bin.gz`](firmware.bin.gz).
 
-```c
-#define PIN_CRESET1 6
-#define PIN_CRESET2 7
-#define PIN_TESTN   17
-#define PIN_CCK     22
-#define PIN_SS      24
-#define PIN_CBUS0   14
-#define PIN_CBUS1   15
-#define PIN_CBUS2   18
-#define PIN_CDI0    10
-#define PIN_CDI1    25
-#define PIN_CDI2    9
-#define PIN_CDI3    8
-#define PIN_CDI4    11
-#define PIN_CDI5    1
-#define PIN_CDI6    16
-#define PIN_CDI7    13
-```
+### With Emu68 (Bare-Metal JIT)
+1. Copy [`firmware.bin.gz`](firmware.bin.gz) directly onto the FAT32 boot partition of your Raspberry Pi SD card (place it in the root folder alongside `Emu68.img`).
+2. Power on or reset the Amiga. Emu68 automatically programs the Efinix Trion T20 FPGA over GPIO bitbang at boot time.
 
-## Authors
-Claude Schwarz
-- aka [@captain-amygdala](https://github.com/captain-amygdala)
+### With PiStorm Linux
+1. Copy [`firmware.bin.gz`](firmware.bin.gz) to your Raspberry Pi:
+   ```bash
+   sudo cp firmware.bin.gz /usr/share/pistorm/
+   ```
+2. Or program it directly using the flasher script:
+   ```bash
+   sudo ./flash.sh firmware.bin.gz
+   ```
 
-If you like this project and want to support me with a donation:
+<details>
+<summary><b>FPGA Programming GPIO Pinout (Hardware Details)</b></summary>
+
+Emu68 and PiStorm Linux program the FPGA over a high-speed parallel/SPI bitbang interface using Raspberry Pi GPIOs:
+
+| Signal | Raspberry Pi BCM GPIO | Description |
+| :--- | :---: | :--- |
+| `PIN_CRESET1` | GPIO 6 | FPGA Configuration Reset 1 |
+| `PIN_CRESET2` | GPIO 7 | FPGA Configuration Reset 2 |
+| `PIN_TESTN` | GPIO 17 | Test Mode Select |
+| `PIN_CCK` | GPIO 22 | Configuration Clock |
+| `PIN_SS` | GPIO 24 | Slave Select / Chip Select |
+| `PIN_CBUS[2:0]` | GPIO 18, 15, 14 | Configuration Bus Control |
+| `PIN_CDI[7:0]` | GPIO 13, 16, 1, 11, 8, 9, 25, 10 | Byte-Wide Configuration Data |
+
+</details>
+
+---
+
+## Support & Donations
+
+If you enjoy this project and would like to support my ongoing work on PiStorm and Amiga hardware, I would greatly appreciate a donation! Every contribution is very welcome and helps keep the project going. ☕
+
+**Claude Schwarz** ([@captain-amygdala](https://github.com/captain-amygdala))
 
 [![](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=JQC4M73U9KKPG)
 
-## Support: PiStorm Discord
+### PiStorm Community Discord
+Join the conversation on the official PiStorm Discord:
 [![](https://dcbadge.limes.pink/api/server/vyHr6nQeGn)](https://discord.gg/vyHr6nQeGn)
+
 
