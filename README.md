@@ -54,12 +54,13 @@ Benchmarked side-by-side in Verilator against Niklas Ekström's unmodified upstr
 
 ## 3. Documentation Index
 
-Detailed engineering and integration manuals are located in the [`DOCS/`](file:///home/claude/antigravity/ps32lite/DOCS) directory:
+Detailed engineering, architecture, and integration manuals are located in the [`DOCS/`](file:///home/claude/antigravity/ps32lite/DOCS) directory:
 
+- [**DOCS/HOW_IT_WORKS.md**](file:///home/claude/antigravity/ps32lite/DOCS/HOW_IT_WORKS.md): **"Wie funktioniert das Ding eigentlich?"** Complete step-by-step guide explaining the Pi <-> FPGA <-> Amiga interface, bus cycles, 2-slot pipelined writes, speculative prefetch, and 182 MHz Wishbone bypass with interactive Mermaid diagrams.
 - [**DOCS/AMIGA_HARDWARE_TIMING.md**](file:///home/claude/antigravity/ps32lite/DOCS/AMIGA_HARDWARE_TIMING.md): Detailed analysis of the Amiga 1200 motherboard clock architecture, the 1.8V falling edge ringing defect on Rev 1D.4/2B, glitch filter implementation, and `bustest` mathematics.
 - [**DOCS/ARCHITECTURE.md**](file:///home/claude/antigravity/ps32lite/DOCS/ARCHITECTURE.md): Complete RTL architectural description, clock domains ($182\text{ MHz}$ / $7\text{ MHz}$), CDC synchronizers, and Efinity timing closure ($186.3\text{ MHz}$).
 - [**DOCS/VIRTUAL_ZORRO_WISHBONE.md**](file:///home/claude/antigravity/ps32lite/DOCS/VIRTUAL_ZORRO_WISHBONE.md): Virtual Zorro-II AutoConfig specification, 64 KB memory map, Wishbone B4 interconnect, INT2/INT6 interrupt registers, ESP32-style GPIO Matrix, and AmigaOS driver code snippets.
-- [**DOCS/VERIFICATION_GUIDE.md**](file:///home/claude/antigravity/ps32lite/DOCS/VERIFICATION_GUIDE.md): Guide to the Verilator C++ simulation testbench, 15 test suites, 331 assertions, side-by-side golden reference co-simulation, and GTKWave tracing.
+- [**DOCS/VERIFICATION_GUIDE.md**](file:///home/claude/antigravity/ps32lite/DOCS/VERIFICATION_GUIDE.md): Guide to the Verilator C++ simulation testbench, 15 test suites, 331 assertions, side-by-side golden reference co-simulation, and interactive Mermaid bus timing waveforms.
 
 ---
 
