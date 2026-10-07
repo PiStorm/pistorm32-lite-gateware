@@ -1,73 +1,106 @@
 /*
+ * PiStorm32-lite Gateware
+ *
  * Copyright 2022 Niklas Ekström
  * Copyright 2022 Claude Schwarz
  *
- * Top-Level PiStorm32-lite Module
+ * 2026 Claude Schwarz Refactor:
+ *   - Modular 3-block architecture (pi_interface, m68k_interface, zorro_device)
+ *   - Speculative 32-bit read prefetch engine with local hit cache
+ *   - Virtual Zorro-II AutoConfig 64KB I/O device (Manufacturer 28020, Product 0x32)
+ *   - Complete static timing closure (fmax >= 182 MHz on Efinix Trion T20)
+ *
+ * Architecture Overview:
+ *
+ *                     +---------------------------------------+
+ *                     |               PS32-lite               |
+ *                     |          (Top-Level Wrapper)          |
+ *                     +---------------------------------------+
+ *                                    /    |    \
+ *                                   /     |     \
+ *         +-----------------------+       |       +-------------------------+
+ *         |     pi_interface      |       |       |     m68k_interface      |
+ *         |  (Raspberry Pi GPIOs  |       |       |  (68020 Bus Master FSM, |
+ *         |   & Request Buffers)  |       |       |   DA-Mux, Clock-Filter) |
+ *         +-----------------------+       |       +-------------------------+
+ *                     \                   |                   /
+ *                      \  +------------------------------+   /
+ *                       --|         zorro_device         |--
+ *                         | (AutoConfig ROM & 64KB I/O)  |
+ *                         +------------------------------+
  */
 
 module pistorm (
-    // Raspberry Pi signals
-    output [2:0]    PI_IPL,             // GPIO0..2
-    output          PI_TXN_IN_PROGRESS, // GPIO3
-    output          PI_KBRESET,         // GPIO4 EMU68
-    input           PI_SER_DAT,         // GPIO5 EMU68
-    input           PI_RD,              // GPIO6
-    input           PI_WR,              // GPIO7
-    input [15:0]    PI_D_IN,            // GPIO[23..8]
-    output [15:0]   PI_D_OUT,
-    output [15:0]   PI_D_OE,
-    input [2:0]     PI_A,               // GPIO[26..24]
-    input           PI_SER_CLK,         // GPIO27 EMU68
+    // -------------------------------------------------------------------------
+    // Physical Raspberry Pi GPIO Signals (Parallel Host Bus)
+    // -------------------------------------------------------------------------
+    output wire [2:0]   PI_IPL,             // Encoded Amiga interrupt level (GPIO[2..0])
+    output wire         PI_TXN_IN_PROGRESS, // Transaction busy flag (GPIO3)
+    output wire         PI_KBRESET,         // Filtered keyboard reset (GPIO4, for EMU68)
+    input  wire         PI_SER_DAT,         // Serial UART RX from Pi (GPIO5, EMU68 debug)
+    input  wire         PI_RD,              // Read strobe, active-low (GPIO6)
+    input  wire         PI_WR,              // Write strobe, active-low (GPIO7)
+    input  wire [15:0]  PI_D_IN,            // Multiplexed data bus input (GPIO[23..8])
+    output wire [15:0]  PI_D_OUT,           // Multiplexed data bus output
+    output wire [15:0]  PI_D_OE,            // Data bus output enables
+    input  wire [2:0]   PI_A,               // Register address (GPIO[26..24])
+    input  wire         PI_SER_CLK,         // Serial UART CLK from Pi (GPIO27, EMU68)
 
-    // Shared data and address bus multiplexing
-    input [31:0]    DA_IN,
-    output [31:0]   DA_OUT,
-    output [31:0]   DA_OE,
-    output          ADDR_LE,
-    output          ADDR_OE_n,
-    output          DATA_OE_n,
-    output          CTRL_OE_n,
+    // -------------------------------------------------------------------------
+    // Multiplexed Address/Data (DA) Bus & PCB Bus Switches / Latches
+    // -------------------------------------------------------------------------
+    input  wire [31:0]  DA_IN,              // 32-bit bidirectional multiplexed bus input
+    output wire [31:0]  DA_OUT,             // 32-bit multiplexed bus output
+    output wire [31:0]  DA_OE,              // 32-bit output enables
+    output wire         ADDR_LE,            // 74LVC573 Address Latch Enable (High = transparent)
+    output wire         ADDR_OE_n,          // 74LVC573 Address Output Enable, active low
+    output wire         DATA_OE_n,          // 74CBTD3384 Data Bus Switch Output Enable, active low
+    output wire         CTRL_OE_n,          // Control Bus Driver Output Enable, active low
 
-    // MC68EC020 signals
-    output [2:0]    MC_FC_OUT,
-    output [2:0]    MC_FC_OE,
-    output [1:0]    MC_SIZE_OUT,
-    output [1:0]    MC_SIZE_OE,
-    output          MC_RW_OUT,
-    output          MC_RW_OE,
-    input           MC_AS_n_IN,
-    output          MC_AS_n_OUT,
-    output          MC_AS_n_OE,
-    output          MC_DS_n_OUT,
-    output          MC_DS_n_OE,
-    input [1:0]     MC_DSACK_n,
-    input [2:0]     MC_IPL_n,
-    output          MC_BR_n_OUT,
-    output          MC_BR_n_OE,
-    input           MC_BG_n,
-    input           MC_RESET_n_IN,
-    output          MC_RESET_n_OUT,
-    output          MC_RESET_n_OE,
-    input           MC_HALT_n_IN,
-    output          MC_HALT_n_OUT,
-    output          MC_HALT_n_OE,
-    input           MC_BERR_n,
-    input           MC_CLK,
+    // -------------------------------------------------------------------------
+    // Motorola MC68EC020 Amiga 1200 Processor Bus Signals
+    // -------------------------------------------------------------------------
+    output wire [2:0]   MC_FC_OUT,          // Function Codes (FC2..FC0)
+    output wire [2:0]   MC_FC_OE,
+    output wire [1:0]   MC_SIZE_OUT,        // Transfer Size (SIZ1..SIZ0)
+    output wire [1:0]   MC_SIZE_OE,
+    output wire         MC_RW_OUT,          // Read / Write (1 = Read, 0 = Write)
+    output wire         MC_RW_OE,
+    input  wire         MC_AS_n_IN,         // Address Strobe input (from motherboard)
+    output wire         MC_AS_n_OUT,        // Address Strobe output (to motherboard)
+    output wire         MC_AS_n_OE,
+    output wire         MC_DS_n_OUT,        // Data Strobe output
+    output wire         MC_DS_n_OE,
+    input  wire [1:0]   MC_DSACK_n,         // Data and Size Acknowledge inputs (DSACK1..DSACK0)
+    input  wire [2:0]   MC_IPL_n,           // Interrupt Priority Level inputs (IPL2..IPL0)
+    output wire         MC_BR_n_OUT,        // Bus Request output (to Gary/Gayle)
+    output wire         MC_BR_n_OE,
+    input  wire         MC_BG_n,            // Bus Grant input (from Gary/Gayle)
+    input  wire         MC_RESET_n_IN,      // System Reset input
+    output wire         MC_RESET_n_OUT,     // System Reset output
+    output wire         MC_RESET_n_OE,
+    input  wire         MC_HALT_n_IN,       // System Halt input
+    output wire         MC_HALT_n_OUT,      // System Halt output
+    output wire         MC_HALT_n_OE,
+    input  wire         MC_BERR_n,          // Bus Error input
+    input  wire         MC_CLK,             // Amiga 14.18 MHz motherboard clock (E1)
 
-    // Miscellaneous Amiga 1200 signals
-    output          INT2_n_OUT,
-    output          INT2_n_OE,
-    output          INT6_n_OUT,
-    output          INT6_n_OE,
-    input           KBRESET,
+    // -------------------------------------------------------------------------
+    // Miscellaneous Amiga 1200 Signals
+    // -------------------------------------------------------------------------
+    output wire         INT2_n_OUT,         // Level 2 Interrupt output (Paula)
+    output wire         INT2_n_OE,
+    output wire         INT6_n_OUT,         // Level 6 Interrupt output (CIA-B)
+    output wire         INT6_n_OE,
+    input  wire         KBRESET,            // Keyboard Reset line from keyboard controller
 
-    // EXT Port
-    input [7:0]     SPARE_IN,
-    output [7:0]    SPARE_OUT,
-    output [7:0]    SPARE_OE,
-
-    // PLL Clock
-    input           AMIPLL_CLKOUT0
+    // -------------------------------------------------------------------------
+    // Expansion & Clock Signals
+    // -------------------------------------------------------------------------
+    input  wire [7:0]   SPARE_IN,           // Auxiliary / expansion header inputs
+    output wire [7:0]   SPARE_OUT,          // Auxiliary / expansion header outputs
+    output wire [7:0]   SPARE_OE,
+    input  wire         AMIPLL_CLKOUT0      // Main FPGA system clock (~182 MHz PLL)
 );
 
 // Spare port assignments & EMU68 UART pass-through
@@ -76,64 +109,78 @@ assign SPARE_OE       = 8'b11111111;
 assign SPARE_OUT[0]   = PI_SER_DAT;
 assign SPARE_OUT[1]   = PI_SER_CLK;
 
-// Main clock from PLL
+// =============================================================================
+// Internal Clock & Interconnect Wiring
+// =============================================================================
+
+// Main internal FPGA clock driven by high-speed PLL (~182 MHz)
 wire clk = AMIPLL_CLKOUT0;
 
-// Interconnect wires: pi_interface <-> m68k_interface
-wire        request_bm;
-wire        drive_reset;
-wire        drive_halt;
-wire        drive_int2;
-wire        drive_int6;
-wire        increment_execute_slot_pointer;
-wire        enable_prefetch;
+// -----------------------------------------------------------------------------
+// Control & Status Interconnect: pi_interface <-> m68k_interface
+// -----------------------------------------------------------------------------
+wire        request_bm;                     // Host requests bus mastership
+wire        drive_reset;                    // Host commands system reset
+wire        drive_halt;                     // Host commands CPU halt
+wire        drive_int2;                     // Host asserts INT2
+wire        drive_int6;                     // Host asserts INT6
+wire        increment_execute_slot_pointer; // Slot ping-pong enable
+wire        enable_prefetch;                // Speculative read prefetch enable
 
-wire        is_bm;
-wire        reset_sync;
-wire        halt_sync;
-wire [2:0]  ipl;
-wire        mc_reset_n_sync;
-wire [23:0] current_bus_address;
+wire        is_bm;                          // Current bus master status
+wire        reset_sync;                     // Synchronized Amiga /RESET
+wire        halt_sync;                      // Synchronized Amiga /HALT
+wire [2:0]  ipl;                            // Synchronized Amiga /IPL
+wire        mc_reset_n_sync;                // Filtered 68020 /RESET
+wire [23:0] current_bus_address;            // Live 68020 bus address for status read
 
-wire [1:0]  req_active;
-wire [1:0]  req_internal_intercept;
-wire        new_req_valid;
-wire        new_req_slot;
-wire [23:0] new_req_addr;
-wire        new_req_rw;
-wire [1:0]  new_req_size;
-wire [23:0] req_address_0;
-wire [23:0] req_address_1;
-wire [31:0] req_data_write_0;
-wire [31:0] req_data_write_1;
-wire [1:0]  req_size_0;
-wire [1:0]  req_size_1;
-wire        req_rw_0;
-wire        req_rw_1;
-wire [2:0]  req_fc_0;
-wire [2:0]  req_fc_1;
+// -----------------------------------------------------------------------------
+// Request Slot Queue Interconnect: pi_interface -> m68k_interface
+// -----------------------------------------------------------------------------
+wire [1:0]  req_active;                     // Active request flags for Slot 0 / 1
+wire [1:0]  req_internal_intercept;         // Precomputed virtual Zorro access flags
+wire        new_req_valid;                  // 1-cycle strobe when Pi writes ADDR_HI
+wire        new_req_slot;                   // Target slot ID (0 or 1)
+wire [23:0] new_req_addr;                   // Full 24-bit physical address
+wire        new_req_rw;                     // 1 = Read, 0 = Write
+wire [1:0]  new_req_size;                   // Transfer size: 0=Byte, 1=Word, 3=Long
+wire [23:0] req_address_0;                  // Latched address Slot 0
+wire [23:0] req_address_1;                  // Latched address Slot 1
+wire [31:0] req_data_write_0;               // Write data Slot 0
+wire [31:0] req_data_write_1;               // Write data Slot 1
+wire [1:0]  req_size_0;                     // Size Slot 0
+wire [1:0]  req_size_1;                     // Size Slot 1
+wire        req_rw_0;                       // R/W Slot 0
+wire        req_rw_1;                       // R/W Slot 1
+wire [2:0]  req_fc_0;                       // Function Code Slot 0
+wire [2:0]  req_fc_1;                       // Function Code Slot 1
 
-wire        set_execute_slot_valid;
-wire        set_execute_slot_val;
+wire        set_execute_slot_valid;         // Slot pointer manual override valid
+wire        set_execute_slot_val;           // Slot pointer manual override value
 
-wire        slot_complete_valid;
-wire        slot_complete_id;
-wire [31:0] slot_complete_data;
-wire        slot_complete_normally;
+// -----------------------------------------------------------------------------
+// Slot Completion Interconnect: m68k_interface -> pi_interface
+// -----------------------------------------------------------------------------
+wire        slot_complete_valid;            // Combinatorial termination pulse
+wire        slot_complete_id;               // Slot ID being completed
+wire [31:0] slot_complete_data;             // Read data to buffer in slot
+wire        slot_complete_normally;         // 1 = Normal (DSACK), 0 = Bus Error (BERR)
 
-// Interconnect wires: m68k_interface <-> zorro_device
-wire        z2_configured;
-wire        z2_shutup;
-wire [7:0]  z2_base_addr_hi;
+// -----------------------------------------------------------------------------
+// Virtual Zorro Configuration & Access Interconnect
+// -----------------------------------------------------------------------------
+wire        z2_configured;                  // Card has received base address
+wire        z2_shutup;                      // Card has received shut-up command
+wire [7:0]  z2_base_addr_hi;                // Base address bits [23:16]
 
-wire        z2_access_strobe;
-wire        z2_access_wr;
-wire [1:0]  z2_access_size;
-wire [23:0] z2_access_addr;
-wire [31:0] z2_access_wr_data;
-wire        z2_access_is_scratchpad;
-wire        z2_access_is_io_regs;
-wire [31:0] z2_rd_data;
+wire        z2_access_strobe;               // Access strobe from m68k FSM
+wire        z2_access_wr;                   // 1 = Write, 0 = Read
+wire [1:0]  z2_access_size;                 // Size: 0=Byte, 1=Word, 3=Long
+wire [23:0] z2_access_addr;                 // Physical address
+wire [31:0] z2_access_wr_data;              // Data to write to scratchpad / config
+wire        z2_access_is_scratchpad;        // Address decoded as scratchpad ($0C)
+wire        z2_access_is_io_regs;           // Address decoded as registers ($00..$0F)
+wire [31:0] z2_rd_data;                     // Data read from AutoConfig ROM or IO regs
 
 // 1. Raspberry Pi Interface Submodule
 pi_interface u_pi (
