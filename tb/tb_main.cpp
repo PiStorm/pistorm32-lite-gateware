@@ -230,7 +230,7 @@ void run_benchmark_suite(SimulationHarness& harness) {
     std::cout << ANSI_BOLD ANSI_BLUE "\n  [15.1] Benchmarking Amiga 1200 Motherboard Chip RAM ($00040000)...\n" ANSI_RESET;
     uint32_t chipmem_base = 0x00040000;
     amiga->set_port_width_region(chipmem_base, 0x10000, PortWidth::PORT_32BIT);
-    amiga->set_wait_states(5); // 5 WS = 8 MC_CLK cycles = 563.8 ns (4 x 140 ns slot)
+    amiga->set_wait_states(4); // 4 WS = exactly 8 MC_CLK cycles (563.8 ns = 560 ns slot)
 
     // Pre-populate test pattern in memory
     for (int i = 0; i < 64; ++i) {
@@ -316,7 +316,7 @@ void run_benchmark_suite(SimulationHarness& harness) {
     std::cout << ANSI_BOLD ANSI_BLUE "\n  [15.2] Benchmarking Amiga Custom Chipset ($00DFF000)...\n" ANSI_RESET;
     uint32_t chipset_base = 0x00DFF000;
     amiga->set_port_width_region(chipset_base, 0x1000, PortWidth::PORT_16BIT);
-    amiga->set_wait_states(5); // 5 WS = 8 MC_CLK cycles = 563.8 ns (4 x 140 ns slot)
+    amiga->set_wait_states(4); // 4 WS = exactly 8 MC_CLK cycles (563.8 ns = 560 ns slot)
 
     for (int i = 0; i < 64; ++i) {
         amiga->mem_write_16(chipset_base + i * 2, 0x0A00 | (uint16_t)i);
