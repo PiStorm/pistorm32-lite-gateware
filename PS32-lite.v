@@ -122,8 +122,12 @@ wire clk = AMIPLL_CLKOUT0;
 wire        request_bm;                     // Host requests bus mastership
 wire        drive_reset;                    // Host commands system reset
 wire        drive_halt;                     // Host commands CPU halt
-wire        drive_int2;                     // Host asserts INT2
-wire        drive_int6;                     // Host asserts INT6
+wire        pi_drive_int2;                  // Host asserts INT2 from Pi
+wire        pi_drive_int6;                  // Host asserts INT6 from Pi
+wire        z2_int2;                        // Virtual Zorro device asserts INT2
+wire        z2_int6;                        // Virtual Zorro device asserts INT6
+wire        drive_int2 = pi_drive_int2 | z2_int2; // Combined Level 2 interrupt drive
+wire        drive_int6 = pi_drive_int6 | z2_int6; // Combined Level 6 interrupt drive
 wire        increment_execute_slot_pointer; // Slot ping-pong enable
 wire        enable_prefetch;                // Speculative read prefetch enable
 
@@ -173,13 +177,12 @@ wire        z2_configured;                  // Card has received base address
 wire        z2_shutup;                      // Card has received shut-up command
 wire [7:0]  z2_base_addr_hi;                // Base address bits [23:16]
 
-wire        z2_access_strobe;               // Access strobe from m68k FSM
+wire        z2_access_valid;                // Access request valid from m68k FSM
+wire        z2_access_ready;                // Access completion ready from zorro_device
 wire        z2_access_wr;                   // 1 = Write, 0 = Read
 wire [1:0]  z2_access_size;                 // Size: 0=Byte, 1=Word, 3=Long
 wire [23:0] z2_access_addr;                 // Physical address
 wire [31:0] z2_access_wr_data;              // Data to write to scratchpad / config
-wire        z2_access_is_scratchpad;        // Address decoded as scratchpad ($0C)
-wire        z2_access_is_io_regs;           // Address decoded as registers ($00..$0F)
 wire [31:0] z2_rd_data;                     // Data read from AutoConfig ROM or IO regs
 
 // 1. Raspberry Pi Interface Submodule
@@ -210,8 +213,8 @@ pi_interface u_pi (
     .request_bm                     (request_bm),
     .drive_reset                    (drive_reset),
     .drive_halt                     (drive_halt),
-    .drive_int2                     (drive_int2),
-    .drive_int6                     (drive_int6),
+    .drive_int2                     (pi_drive_int2),
+    .drive_int6                     (pi_drive_int6),
     .increment_execute_slot_pointer (increment_execute_slot_pointer),
     .enable_prefetch                (enable_prefetch),
 
@@ -250,7 +253,7 @@ pi_interface u_pi (
     .slot_complete_normally         (slot_complete_normally)
 );
 
-// 2. Virtual Zorro-II AutoConfig Device Submodule
+// 2. Virtual Zorro-II AutoConfig Device Submodule (Wishbone B4 Architecture)
 zorro_device #(
     .Z2_MANUF_ID (16'd28020), // 0x6D74
     .Z2_PROD_ID  (8'h32),     // PiStorm32
@@ -264,14 +267,17 @@ zorro_device #(
     .z2_shutup            (z2_shutup),
     .z2_base_addr_hi      (z2_base_addr_hi),
 
-    // Access handshake from m68k FSM
-    .access_strobe        (z2_access_strobe),
+    // Amiga Interrupt Requests
+    .z2_int2              (z2_int2),
+    .z2_int6              (z2_int6),
+
+    // Access handshake from/to m68k FSM
+    .access_valid         (z2_access_valid),
+    .access_ready         (z2_access_ready),
     .access_wr            (z2_access_wr),
     .access_size          (z2_access_size),
     .access_addr          (z2_access_addr),
     .access_wr_data       (z2_access_wr_data),
-    .access_is_scratchpad (z2_access_is_scratchpad),
-    .access_is_io_regs    (z2_access_is_io_regs),
     .access_rd_data       (z2_rd_data)
 );
 
@@ -366,14 +372,13 @@ m68k_interface u_m68k (
     .slot_complete_data             (slot_complete_data),
     .slot_complete_normally         (slot_complete_normally),
 
-    // Zorro device interface
-    .z2_access_strobe               (z2_access_strobe),
+    // Zorro device interface (Pipelined Handshake)
+    .z2_access_valid                (z2_access_valid),
+    .z2_access_ready                (z2_access_ready),
     .z2_access_wr                   (z2_access_wr),
     .z2_access_size                 (z2_access_size),
     .z2_access_addr                 (z2_access_addr),
     .z2_access_wr_data              (z2_access_wr_data),
-    .z2_access_is_scratchpad        (z2_access_is_scratchpad),
-    .z2_access_is_io_regs           (z2_access_is_io_regs),
     .z2_rd_data                     (z2_rd_data)
 );
 

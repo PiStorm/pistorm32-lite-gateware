@@ -119,15 +119,14 @@ module m68k_interface (
     output wire        slot_complete_normally, // 1 = Normal (DSACK), 0 = Bus Error (BERR)
 
     // -------------------------------------------------------------------------
-    // Virtual Zorro Device Interface
+    // Virtual Zorro Device Interface (Pipelined Handshake)
     // -------------------------------------------------------------------------
-    output reg         z2_access_strobe = 1'b0,        // 1-cycle pulse in STATE_INTERNAL_FINISH
+    output reg         z2_access_valid = 1'b0,         // Access request pending
+    input  wire        z2_access_ready,                // Access completion ready from zorro_device
     output reg         z2_access_wr = 1'b0,            // 1 = Write, 0 = Read
     output reg  [1:0]  z2_access_size = 2'd0,          // 0=Byte, 1=Word, 3=Long
     output reg  [23:0] z2_access_addr = 24'd0,         // Physical address
     output reg  [31:0] z2_access_wr_data = 32'd0,      // Write data
-    output reg         z2_access_is_scratchpad = 1'b0, // Precomputed scratchpad flag ($0C)
-    output reg         z2_access_is_io_regs = 1'b0,    // Precomputed IO register flag ($00..$0F)
     input  wire [31:0] z2_rd_data                      // Read data from zorro_device
 );
 
@@ -254,7 +253,8 @@ module m68k_interface (
     // Request slot execution pointers
     reg         current_execute_slot = 1'b0;
     (* syn_preserve = 1 *) reg current_execute_slot_addr = 1'b0;
-    reg         internal_slot = 1'b0;
+    (* syn_preserve = 1 *) reg current_execute_slot_complete = 1'b0;
+    (* syn_preserve = 1 *) reg current_execute_slot_ctrl = 1'b0;
 
     // =========================================================================
     // SECTION 4: Speculative 32-Bit Read Prefetch Engine Registers
@@ -355,12 +355,12 @@ module m68k_interface (
     // Current request multiplexers
     wire [23:0] cur_req_addr = current_execute_slot_addr ? req_address_1 : req_address_0;
     wire [31:0] cur_req_data = current_execute_slot ? req_data_write_1 : req_data_write_0;
-    wire [1:0]  cur_req_size = current_execute_slot ? req_size_1 : req_size_0;
-    wire        cur_req_rw   = current_execute_slot ? req_rw_1 : req_rw_0;
-    wire [2:0]  cur_req_fc   = current_execute_slot ? req_fc_1 : req_fc_0;
-    wire        cur_req_act  = current_execute_slot ? req_active[1] : req_active[0];
-    wire        cur_req_int  = current_execute_slot ? req_internal_intercept[1] : req_internal_intercept[0];
-    wire        cur_req_hit  = current_execute_slot ? req_prefetch_hit[1] : req_prefetch_hit[0];
+    wire [1:0]  cur_req_size = current_execute_slot_ctrl ? req_size_1 : req_size_0;
+    wire        cur_req_rw   = current_execute_slot_ctrl ? req_rw_1 : req_rw_0;
+    wire [2:0]  cur_req_fc   = current_execute_slot_ctrl ? req_fc_1 : req_fc_0;
+    wire        cur_req_act  = current_execute_slot_ctrl ? req_active[1] : req_active[0];
+    wire        cur_req_int  = current_execute_slot_ctrl ? req_internal_intercept[1] : req_internal_intercept[0];
+    wire        cur_req_hit  = current_execute_slot_ctrl ? req_prefetch_hit[1] : req_prefetch_hit[0];
 
     // =========================================================================
     // SECTION 6: 10-State One-Hot MC68020 Bus Master State Machine
@@ -404,13 +404,18 @@ module m68k_interface (
     // Combinatorial Slot Completion Logic
     // Fires on the exact clock edge the transaction completes, avoiding pipeline bubbles.
     wire normal_cycle_terminate    = state[STATE_BIT_MAYBE_TERMINATE_ACCESS] && (!is_prefetch_cycle) && (!terminated_normally || size_le_transfered);
-    wire internal_finish_terminate = state[STATE_BIT_INTERNAL_FINISH];
-    wire prefetch_hit_terminate    = state[STATE_BIT_WAIT_ACTIVE_REQUEST] && cur_req_act && (!cur_req_int) && cur_req_hit;
+    wire internal_finish_terminate = state[STATE_BIT_INTERNAL_FINISH] && z2_access_ready;
+
+    // Parallel pre-computation of prefetch hit condition per slot to minimize LUT cascade delay
+    wire slot0_prefetch_hit        = req_active[0] && (!req_internal_intercept[0]) && req_prefetch_hit[0];
+    wire slot1_prefetch_hit        = req_active[1] && (!req_internal_intercept[1]) && req_prefetch_hit[1];
+    wire cur_prefetch_hit          = current_execute_slot_ctrl ? slot1_prefetch_hit : slot0_prefetch_hit;
+    wire prefetch_hit_terminate    = state[STATE_BIT_WAIT_ACTIVE_REQUEST] && cur_prefetch_hit;
 
     assign slot_complete_valid     = normal_cycle_terminate || internal_finish_terminate || prefetch_hit_terminate;
-    assign slot_complete_id        = internal_finish_terminate ? internal_slot : current_execute_slot;
-    assign slot_complete_data      = internal_finish_terminate ? z2_rd_data :
-                                     prefetch_hit_terminate    ? prefetch_data :
+    assign slot_complete_id        = current_execute_slot_complete;
+    assign slot_complete_data      = state[STATE_BIT_INTERNAL_FINISH] ? z2_rd_data :
+                                     prefetch_hit_terminate           ? prefetch_data :
                                      data_read;
     assign slot_complete_normally  = normal_cycle_terminate ? terminated_normally : 1'b1;
 
@@ -421,14 +426,17 @@ module m68k_interface (
                                  (cur_req_addr[1:0] == 2'b00) && (port_width == 2'd3) &&
                                  ((address[23:21] == 3'b000) || (&address[23:19]));
 
+    // Prefetch hit detection qualification signals
+    wire req_prefetch_qual = enable_prefetch && prefetch_valid && new_req_rw &&
+                             (new_req_size == 2'd3) &&
+                             (new_req_addr[23:16] == prefetch_addr[23:16]);
+    wire slot0_addr_match  = (req_address_0[15:0] == prefetch_addr[15:0]);
+    wire slot1_addr_match  = (req_address_1[15:0] == prefetch_addr[15:0]);
 
-// =============================================================================
+    // =========================================================================
     // SECTION 7: Main FSM Synchronous State Engine
     // =============================================================================
     always @(posedge clk) begin
-        // Default: deassert 1-cycle internal Zorro strobe
-        z2_access_strobe <= 1'b0;
-
         // Evaluate idle speculative prefetch readiness:
         // Prefetch is triggered only when enabled, FPGA owns the bus (is_bm),
         // previous cycle qualified as safe (Chip-RAM or Exp-RAM 32-bit read),
@@ -438,8 +446,10 @@ module m68k_interface (
 
         // Manual slot execution pointer override from PI_REG_SLOT
         if (set_execute_slot_valid) begin
-            current_execute_slot      <= set_execute_slot_val;
-            current_execute_slot_addr <= set_execute_slot_val;
+            current_execute_slot          <= set_execute_slot_val;
+            current_execute_slot_addr     <= set_execute_slot_val;
+            current_execute_slot_complete <= set_execute_slot_val;
+            current_execute_slot_ctrl     <= set_execute_slot_val;
         end
 
         (* parallel_case, full_case *) case (1'b1)
@@ -448,7 +458,7 @@ module m68k_interface (
             // STATE 0: WAIT_ACTIVE_REQUEST
             // Bus master idle state. Arbitrates between:
             //   1. Host Pi queue requests (cur_req_act)
-            //      a) Virtual Zorro internal access  -> 0 wait-state internal route
+            //      a) Virtual Zorro internal access  -> pipelined Wishbone route
             //      b) Speculative read prefetch hit   -> 0 wait-state instant response
             //      c) Normal Amiga physical access   -> launch S0 bus cycle
             //   2. Speculative prefetch read-ahead   -> read next longword if bus idle
@@ -469,13 +479,11 @@ module m68k_interface (
                         is_prefetch_cycle <= 1'b0;
                         req_prefetch_hit  <= 2'b00;
 
-                        z2_access_addr          <= cur_req_addr;
-                        z2_access_wr_data       <= cur_req_data;
-                        z2_access_size          <= cur_req_size;
-                        z2_access_wr            <= !cur_req_rw;
-                        internal_slot           <= current_execute_slot;
-                        z2_access_is_scratchpad <= (cur_req_addr[15:2] == 14'h0003);
-                        z2_access_is_io_regs    <= (cur_req_addr[15:4] == 12'd0);
+                        z2_access_addr    <= cur_req_addr;
+                        z2_access_wr_data <= cur_req_data;
+                        z2_access_size    <= cur_req_size;
+                        z2_access_wr      <= !cur_req_rw;
+                        z2_access_valid   <= 1'b1;
 
                         state <= STATE_INTERNAL_FINISH;
 
@@ -485,10 +493,12 @@ module m68k_interface (
                         // The requested 32-bit data was already read into FPGA
                         // prefetch buffer during idle cycles. Immediate completion!
                         // -----------------------------------------------------
-                        req_prefetch_hit[current_execute_slot] <= 1'b0;
+                        req_prefetch_hit[current_execute_slot_ctrl] <= 1'b0;
                         if (increment_execute_slot_pointer) begin
-                            current_execute_slot      <= current_execute_slot + 1'd1;
-                            current_execute_slot_addr <= current_execute_slot_addr + 1'd1;
+                            current_execute_slot          <= current_execute_slot + 1'd1;
+                            current_execute_slot_addr     <= current_execute_slot_addr + 1'd1;
+                            current_execute_slot_complete <= current_execute_slot_complete + 1'd1;
+                            current_execute_slot_ctrl     <= current_execute_slot_ctrl + 1'd1;
                         end
                         prefetch_valid <= 1'b0;
 
@@ -811,8 +821,10 @@ module m68k_interface (
                     if (!terminated_normally || size_le_transfered) begin
                         next_prefetch_addr <= address + 24'd4;
                         if (increment_execute_slot_pointer) begin
-                            current_execute_slot      <= current_execute_slot + 1'd1;
-                            current_execute_slot_addr <= current_execute_slot_addr + 1'd1;
+                            current_execute_slot          <= current_execute_slot + 1'd1;
+                            current_execute_slot_addr     <= current_execute_slot_addr + 1'd1;
+                            current_execute_slot_complete <= current_execute_slot_complete + 1'd1;
+                            current_execute_slot_ctrl     <= current_execute_slot_ctrl + 1'd1;
                         end
 
                         if (prefetch_eligible_term) begin
@@ -836,19 +848,23 @@ module m68k_interface (
 
             // -----------------------------------------------------------------
             // STATE 9: INTERNAL_FINISH
-            // Zero-wait-state completion state for internal Virtual Zorro card.
-            // Generates a 1-clock strobe (z2_access_strobe) to write register /
-            // latch data, advances queue slot pointer, and returns to idle.
+            // Pipelined completion state for internal Virtual Zorro card.
+            // Waits for z2_access_ready from zorro_device Wishbone subsystem,
+            // advances queue slot pointer, and returns to idle.
             // -----------------------------------------------------------------
             state[STATE_BIT_INTERNAL_FINISH]: begin
-                z2_access_strobe <= 1'b1;
+                if (z2_access_ready) begin
+                    z2_access_valid <= 1'b0;
 
-                if (increment_execute_slot_pointer) begin
-                    current_execute_slot      <= current_execute_slot + 1'd1;
-                    current_execute_slot_addr <= current_execute_slot_addr + 1'd1;
+                    if (increment_execute_slot_pointer) begin
+                        current_execute_slot          <= current_execute_slot + 1'd1;
+                        current_execute_slot_addr     <= current_execute_slot_addr + 1'd1;
+                        current_execute_slot_complete <= current_execute_slot_complete + 1'd1;
+                        current_execute_slot_ctrl     <= current_execute_slot_ctrl + 1'd1;
+                    end
+
+                    state <= STATE_WAIT_ACTIVE_REQUEST;
                 end
-
-                state <= STATE_WAIT_ACTIVE_REQUEST;
             end
 
             default: state <= STATE_WAIT_ACTIVE_REQUEST;
@@ -856,9 +872,12 @@ module m68k_interface (
 
         // Asynchronous Request Prefetch Match Detection:
         // Evaluates immediately when a new request is posted by Pi interface.
+        // Decoupled per-slot to eliminate cross-slot multiplexer delay.
         if (new_req_valid) begin
-            req_prefetch_hit[new_req_slot] <= enable_prefetch && prefetch_valid && new_req_rw &&
-                                             (new_req_addr == prefetch_addr) && (new_req_size == 2'd3);
+            if (!new_req_slot)
+                req_prefetch_hit[0] <= req_prefetch_qual && slot0_addr_match;
+            else
+                req_prefetch_hit[1] <= req_prefetch_qual && slot1_addr_match;
         end
 
         // Bus loss, Reset, or Halt safety: flush prefetch cache
@@ -873,13 +892,11 @@ module m68k_interface (
 
         // Hard reset initialization of internal Zorro transfer registers
         if (reset_sync || drive_reset) begin
-            z2_access_addr          <= 24'd0;
-            z2_access_wr_data       <= 32'd0;
-            z2_access_size          <= 2'd0;
-            z2_access_wr            <= 1'b0;
-            internal_slot           <= 1'b0;
-            z2_access_is_scratchpad <= 1'b0;
-            z2_access_is_io_regs    <= 1'b0;
+            z2_access_valid   <= 1'b0;
+            z2_access_addr    <= 24'd0;
+            z2_access_wr_data <= 32'd0;
+            z2_access_size    <= 2'd0;
+            z2_access_wr      <= 1'b0;
         end
     end
 

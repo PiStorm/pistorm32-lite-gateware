@@ -1135,6 +1135,79 @@ int main(int argc, char** argv) {
 
         TEST_ASSERT(shutup_cycles > 0, "Shut-up: Access to 0x00E80000 forwards to external bus after shut-up command");
         TEST_ASSERT(shutup_val == 0x99, "Shut-up: External busboard data received at 0x00E80000 after shut-up");
+
+        // 14.6: Wishbone Interrupt Controller & Amiga INT2/INT6 Verification
+        std::cout << ANSI_CYAN "  [14.6] Testing Wishbone Interrupt Controller (INT2 & INT6)..." ANSI_RESET << std::endl;
+        // Pulse reset to wake up card from shut-up state
+        amiga->set_external_reset(true);
+        harness.run_mc_cycles(4);
+        amiga->set_external_reset(false);
+        harness.run_mc_cycles(4);
+
+        // Re-configure card after reset
+        pi->ps32_write_8(0x00E80048, 0xE0);
+        pi->ps32_write_8(0x00E8004A, 0x90);
+        pi->flush_pending_writes();
+
+        // Check initial interrupt registers
+        uint32_t init_status = pi->ps32_read_32(0x00E90010);
+        uint32_t init_enable = pi->ps32_read_32(0x00E90014);
+        TEST_ASSERT(init_status == 0, "Wishbone IRQ: Initial INT_STATUS register is 0");
+        TEST_ASSERT(init_enable == 0, "Wishbone IRQ: Initial INT_ENABLE register is 0");
+        TEST_ASSERT(dut->INT2_n_OE == 0, "Wishbone IRQ: INT2_n is released initially");
+        TEST_ASSERT(dut->INT6_n_OE == 0, "Wishbone IRQ: INT6_n is released initially");
+
+        // Enable INT2 in INT_ENABLE register
+        pi->ps32_write_32(0x00E90014, 0x01); // Bit 0 = int2_enable
+        pi->flush_pending_writes();
+        TEST_ASSERT(pi->ps32_read_32(0x00E90014) == 0x01, "Wishbone IRQ: INT_ENABLE reads back 0x01 (INT2 enabled)");
+        TEST_ASSERT(dut->INT2_n_OE == 0, "Wishbone IRQ: INT2_n still inactive before trigger");
+
+        // Force INT2 via INT_FORCE register
+        pi->ps32_write_32(0x00E90018, 0x01); // Bit 0 = force int2
+        pi->flush_pending_writes();
+        harness.step_cycles(2);
+        TEST_ASSERT(dut->INT2_n_OE == 1 && dut->INT2_n_OUT == 0, "Wishbone IRQ: Card successfully drives Amiga INT2_n LOW");
+        TEST_ASSERT((pi->ps32_read_32(0x00E90010) & 1) == 1, "Wishbone IRQ: INT_STATUS bit 0 is pending");
+
+        // Clear INT2 via Write-1-to-Clear (W1C)
+        pi->ps32_write_32(0x00E90010, 0x01);
+        pi->flush_pending_writes();
+        harness.step_cycles(2);
+        TEST_ASSERT(dut->INT2_n_OE == 0, "Wishbone IRQ: INT2_n released after W1C acknowledge");
+        TEST_ASSERT((pi->ps32_read_32(0x00E90010) & 1) == 0, "Wishbone IRQ: INT_STATUS bit 0 cleared");
+
+        // Enable INT6 in INT_ENABLE register
+        pi->ps32_write_32(0x00E90014, 0x02); // Bit 1 = int6_enable
+        pi->flush_pending_writes();
+        TEST_ASSERT(pi->ps32_read_32(0x00E90014) == 0x02, "Wishbone IRQ: INT_ENABLE reads back 0x02 (INT6 enabled)");
+
+        // Force INT6 via INT_FORCE register
+        pi->ps32_write_32(0x00E90018, 0x02); // Bit 1 = force int6
+        pi->flush_pending_writes();
+        harness.step_cycles(2);
+        TEST_ASSERT(dut->INT6_n_OE == 1 && dut->INT6_n_OUT == 0, "Wishbone IRQ: Card successfully drives Amiga INT6_n LOW");
+        TEST_ASSERT((pi->ps32_read_32(0x00E90010) & 2) == 2, "Wishbone IRQ: INT_STATUS bit 1 is pending");
+
+        // Clear INT6 via Write-1-to-Clear (W1C)
+        pi->ps32_write_32(0x00E90010, 0x02);
+        pi->flush_pending_writes();
+        harness.step_cycles(2);
+        TEST_ASSERT(dut->INT6_n_OE == 0, "Wishbone IRQ: INT6_n released after W1C acknowledge");
+        TEST_ASSERT((pi->ps32_read_32(0x00E90010) & 2) == 0, "Wishbone IRQ: INT_STATUS bit 1 cleared");
+
+        // Test Slave 1 (Peripheral slot / SPI Master at $0100..$01FF)
+        pi->ps32_write_32(0x00E90100, 0x12345678);
+        pi->ps32_write_32(0x00E90104, 0xAABBCCDD);
+        pi->flush_pending_writes();
+        uint32_t spi_ctrl_val = pi->ps32_read_32(0x00E90100);
+        uint32_t spi_data_val = pi->ps32_read_32(0x00E90104);
+        TEST_ASSERT(spi_ctrl_val == 0x12345678, "Wishbone Slave 1: SPI_CTRL register matches 0x12345678");
+        TEST_ASSERT(spi_data_val == 0xAABBCCDD, "Wishbone Slave 1: SPI_DATA register matches 0xAABBCCDD");
+
+        // Test Unmapped Space ($00E90200) safe termination
+        uint32_t unmapped_val = pi->ps32_read_32(0x00E90200);
+        TEST_ASSERT(unmapped_val == 0, "Wishbone Default Slave: Unmapped address terminates safely returning 0");
     }
 
     // =========================================================================
