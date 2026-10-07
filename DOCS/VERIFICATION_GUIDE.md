@@ -74,15 +74,15 @@ make trace
 ```mermaid
 sequenceDiagram
     autonumber
-    participant SYS as sys_clk (182 MHz)
-    participant CLK as Amiga MC_CLK (14.18 MHz)
-    participant FSM as m68k FSM State
-    participant ADDR as MC_A[31:0]
-    participant AS as MC_AS_n
-    participant DS as MC_DS_n
-    participant DSACK as MC_DSACK[1:0]_n
-    participant DATA as DA_IN
-    participant LATCH as mc_data_read
+    participant SYS as "sys_clk (182 MHz)"
+    participant CLK as "Amiga MC_CLK (14.18 MHz)"
+    participant FSM as "m68k FSM State"
+    participant ADDR as "MC_A[31:0]"
+    participant AS as "MC_AS_n"
+    participant DS as "MC_DS_n"
+    participant DSACK as "MC_DSACK[1:0]_n"
+    participant DATA as "DA_IN"
+    participant LATCH as "mc_data_read"
 
     Note over FSM: S0: Idle
     CLK->>FSM: Rising edge
@@ -117,14 +117,14 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Host as Host Queue
-    participant FSM as m68k FSM State
-    participant ADDR as MC_A[31:0]
-    participant RW as MC_RW
-    participant AS as MC_AS_n
-    participant DS as MC_DS_n
-    participant DATA as DA_OUT[31:0]
-    participant DSACK as MC_DSACK[1:0]_n
+    participant Host as "Host Queue"
+    participant FSM as "m68k FSM State"
+    participant ADDR as "MC_A[31:0]"
+    participant RW as "MC_RW"
+    participant AS as "MC_AS_n"
+    participant DS as "MC_DS_n"
+    participant DATA as "DA_OUT[31:0]"
+    participant DSACK as "MC_DSACK[1:0]_n"
 
     Host->>FSM: Slot 0 Write ($00040000, $AABBCCDD)
     FSM->>ADDR: Drive Address
@@ -141,7 +141,7 @@ sequenceDiagram
     FSM->>DS: MC_DS_n = HIGH
     FSM->>DATA: DATA_OE_n = 1
     
-    Note over Host,FSM: Slot 0 finishes; Slot 1 starts immediately with 0 idle cycles
+    Note over Host,FSM: Slot 0 finishes, Slot 1 starts immediately with 0 idle cycles
 ```
 
 **Simulation Waveform (WaveDrom SVG):**
@@ -154,10 +154,10 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Pi as Raspberry Pi Host
-    participant WB_M as Wishbone Master (pi_interface)
-    participant WB_S as Wishbone Slave (zorro_device)
-    participant Amiga as Amiga Motherboard Lines
+    participant Pi as "Raspberry Pi Host"
+    participant WB_M as "Wishbone Master (pi_interface)"
+    participant WB_S as "Wishbone Slave (zorro_device)"
+    participant Amiga as "Amiga Motherboard Lines"
 
     Pi->>WB_M: Read $00E90204 (GPIO_IN)
     Note over WB_M: Internal address detected
@@ -181,12 +181,12 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Pin as Pin MC_CLK (with 1.8V Dip)
-    participant S0 as mc_clk_raw_sync[0]
-    participant S1 as mc_clk_raw_sync[1]
-    participant Out as mc_clk_filtered
+    participant Pin as "Pin MC_CLK (with 1.8V Dip)"
+    participant S0 as "mc_clk_raw_sync[0]"
+    participant S1 as "mc_clk_raw_sync[1]"
+    participant Out as "mc_clk_filtered"
 
-    Note over Pin: MC_CLK falls HIGH -> LOW
+    Note over Pin: MC_CLK falls HIGH to LOW
     Pin->>Pin: Ringing bounce to 1.8V for 4 ns
     
     Note over S0,S1: Synchronizer samples bounce
@@ -194,7 +194,7 @@ sequenceDiagram
     S1->>S1: Delayed by 1 sys_clk (5.49 ns)
     
     Note over Out: Lockout counter holds state for 3 ticks (16.5 ns)
-    Note over Out: Dip is suppressed; filtered clock stays clean LOW
+    Note over Out: Dip is suppressed, filtered clock stays clean LOW
 ```
 
 **Simulation Waveform (WaveDrom SVG):**

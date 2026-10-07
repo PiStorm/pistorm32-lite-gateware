@@ -95,10 +95,10 @@ When the Pi needs to read 32 bits from Chip RAM (e.g., `move.l ($00040000), d0`)
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Pi as Raspberry Pi (EMU68)
-    participant PI_IF as pi_interface.v
-    participant M68K as m68k_interface.v
-    participant Amiga as Amiga 1200 (Alice / RAM)
+    participant Pi as "Raspberry Pi (EMU68)"
+    participant PI_IF as "pi_interface.v"
+    participant M68K as "m68k_interface.v"
+    participant Amiga as "Amiga 1200 (Alice / RAM)"
 
     Note over Pi,PI_IF: 1. Pi sets target address
     Pi->>PI_IF: Write ADDR_LO = 0x0000 (PI_A=2)
@@ -108,7 +108,7 @@ sequenceDiagram
     Note over PI_IF,M68K: 2. Dispatch to 68020 FSM
     PI_IF->>M68K: new_req_valid (Slot 0, Addr: 0x00040000, Longword, Read)
     
-    Note over M68K,Amiga: 3. MC68020 Bus Cycle (S0 -> S5)
+    Note over M68K,Amiga: 3. MC68020 Bus Cycle (S0 to S5)
     M68K->>Amiga: Drive MC_A = 0x00040000, R/W = 1
     M68K->>Amiga: Assert MC_AS_n = LOW, MC_DS_n = LOW (S1)
     
@@ -124,8 +124,8 @@ sequenceDiagram
     Note over PI_IF: req_active[0] <= 0, PI_TXN_IN_PROGRESS = 0
 
     Note over Pi,PI_IF: 6. Pi reads back data
-    Pi->>PI_IF: Read DATA_LO (PI_A=0) -> 0x5678
-    Pi->>PI_IF: Read DATA_HI (PI_A=1) -> 0x1234
+    Pi->>PI_IF: Read DATA_LO (PI_A=0) returns 0x5678
+    Pi->>PI_IF: Read DATA_HI (PI_A=1) returns 0x1234
 ```
 
 ---
@@ -142,13 +142,13 @@ The two-request-slot pipeline removes this delay:
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Pi as Raspberry Pi
-    participant Slot0 as Request Slot 0
-    participant Slot1 as Request Slot 1
-    participant Bus as Amiga Motherboard Bus
+    participant Pi as "Raspberry Pi"
+    participant Slot0 as "Request Slot 0"
+    participant Slot1 as "Request Slot 1"
+    participant Bus as "Amiga Motherboard Bus"
 
     Pi->>Slot0: Write DATA_LO, DATA_HI, ADDR_LO, ADDR_HI
-    Note over Slot0,Bus: Slot 0 active -> cycle starts
+    Note over Slot0,Bus: Slot 0 active: cycle starts
     Slot0->>Bus: Amiga Bus Cycle #1 (560 ns)
 
     Note over Pi,Slot1: Pi switches to Slot 1 immediately:
@@ -208,11 +208,11 @@ Addresses in the range `$00E90000`–`$00E9FFFF` are assigned to the virtual Zor
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Pi as Raspberry Pi / Amiga CPU
-    participant Dec as Address Decoder
-    participant WB as Wishbone Master
-    participant Slave as Wishbone Slave (GPIO/Mailbox)
-    participant Amiga as Amiga Motherboard Bus
+    participant Pi as "Raspberry Pi / Amiga CPU"
+    participant Dec as "Address Decoder"
+    participant WB as "Wishbone Master"
+    participant Slave as "Wishbone Slave (GPIO/Mailbox)"
+    participant Amiga as "Amiga Motherboard Bus"
 
     Pi->>Dec: Read/Write $00E90200
     Note over Dec: Address is internal ($00E9xxxx)
