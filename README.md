@@ -85,3 +85,15 @@ EMU68 and PiStorm Linux automatically program the FPGA bitstream at boot over SP
 #define PIN_CDI6    16
 #define PIN_CDI7    13
 ```
+
+## Authors
+Claude Schwarz
+- aka [@captain-amygdala](https://github.com/captain-amygdala)
+
+If you like this project and want to support me with a donation:
+
+[![](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=JQC4M73U9KKPG)
+
+## Support: PiStorm Discord
+[![](https://dcbadge.limes.pink/api/server/vyHr6nQeGn)](https://discord.gg/vyHr6nQeGn)
+
