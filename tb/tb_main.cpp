@@ -1205,9 +1205,95 @@ int main(int argc, char** argv) {
         TEST_ASSERT(spi_ctrl_val == 0x12345678, "Wishbone Slave 1: SPI_CTRL register matches 0x12345678");
         TEST_ASSERT(spi_data_val == 0xAABBCCDD, "Wishbone Slave 1: SPI_DATA register matches 0xAABBCCDD");
 
-        // Test Unmapped Space ($00E90200) safe termination
-        uint32_t unmapped_val = pi->ps32_read_32(0x00E90200);
-        TEST_ASSERT(unmapped_val == 0, "Wishbone Default Slave: Unmapped address terminates safely returning 0");
+        // ---------------------------------------------------------------------
+        // [14.7] Testing Wishbone Slave 2: ESP32-Style GPIO Matrix & IO MUX ($00E90200)
+        // ---------------------------------------------------------------------
+        std::cout << "  [14.7] Testing Wishbone Slave 2: ESP32-Style GPIO Matrix & IO MUX ($00E90200)..." << std::endl;
+
+        // 1. Verify Mode 0 Reset Default: Debug DAT/CLK pass-through, pins 7:2 are high
+        uint32_t iomux_ctrl = pi->ps32_read_32(0x00E90200);
+        uint32_t gpio_dir   = pi->ps32_read_32(0x00E90214);
+        TEST_ASSERT((iomux_ctrl & 0x07) == 0, "GPIO Matrix: Default IOMUX_CTRL mode is 0 (Debug Active)");
+        TEST_ASSERT((gpio_dir & 0xFF) == 0xFF, "GPIO Matrix: Default GPIO_DIR is 0xFF (All outputs)");
+        TEST_ASSERT(dut->SPARE_OE == 0xFF, "GPIO Matrix: Default SPARE_OE is 0xFF");
+
+        pi->set_serial(1, 0);
+        harness.run_mc_cycles(2);
+        TEST_ASSERT(dut->SPARE_OUT == 0xFD, "GPIO Matrix Mode 0: SER_DAT=1, SER_CLK=0 -> SPARE_OUT = 0xFD");
+        pi->set_serial(0, 1);
+        harness.run_mc_cycles(2);
+        TEST_ASSERT(dut->SPARE_OUT == 0xFE, "GPIO Matrix Mode 0: SER_DAT=0, SER_CLK=1 -> SPARE_OUT = 0xFE");
+
+        // 2. Mode 1: All GPIO (Debug Disabled)
+        pi->ps32_write_32(0x00E90200, 0x00000001); // Mode 1
+        pi->ps32_write_32(0x00E90208, 0x000000AA); // GPIO_OUT = 0xAA
+        pi->flush_pending_writes();
+        harness.run_mc_cycles(2);
+        TEST_ASSERT(dut->SPARE_OUT == 0xAA, "GPIO Matrix Mode 1: Direct write 0xAA routed to SPARE_OUT");
+
+        // Atomic Bit Set (W1TS)
+        pi->ps32_write_32(0x00E9020C, 0x00000005); // Set bits 0 and 2 (0xAA | 0x05 = 0xAF)
+        pi->flush_pending_writes();
+        harness.run_mc_cycles(2);
+        TEST_ASSERT(dut->SPARE_OUT == 0xAF, "GPIO Matrix: Atomic W1TS set bits 0,2 -> SPARE_OUT = 0xAF");
+
+        // Atomic Bit Clear (W1TC)
+        pi->ps32_write_32(0x00E90210, 0x000000A0); // Clear bits 7 and 5 (0xAF & ~0xA0 = 0x0F)
+        pi->flush_pending_writes();
+        harness.run_mc_cycles(2);
+        TEST_ASSERT(dut->SPARE_OUT == 0x0F, "GPIO Matrix: Atomic W1TC clear bits 7,5 -> SPARE_OUT = 0x0F");
+
+        uint32_t gpio_out_readback = pi->ps32_read_32(0x00E90208);
+        TEST_ASSERT((gpio_out_readback & 0xFF) == 0x0F, "GPIO Matrix: GPIO_OUT readback matches 0x0F");
+
+        // 3. Direction Control (Output Enable)
+        pi->ps32_write_32(0x00E9021C, 0x00000003); // Atomic Direction Clear: bits 1,0 become inputs
+        pi->flush_pending_writes();
+        harness.run_mc_cycles(2);
+        TEST_ASSERT(dut->SPARE_OE == 0xFC, "GPIO Matrix: Atomic DIR_CLR bits 1,0 -> SPARE_OE = 0xFC");
+
+        pi->ps32_write_32(0x00E90218, 0x00000001); // Atomic Direction Set: bit 0 becomes output
+        pi->flush_pending_writes();
+        harness.run_mc_cycles(2);
+        TEST_ASSERT(dut->SPARE_OE == 0xFD, "GPIO Matrix: Atomic DIR_SET bit 0 -> SPARE_OE = 0xFD");
+
+        // 4. Live Input Reading (GPIO_IN)
+        dut->SPARE_IN = 0x5A;
+        harness.run_mc_cycles(2);
+        uint32_t in_val1 = pi->ps32_read_32(0x00E90204);
+        TEST_ASSERT((in_val1 & 0xFF) == 0x5A, "GPIO Matrix: GPIO_IN reads physical pins (0x5A)");
+
+        dut->SPARE_IN = 0xC3;
+        harness.run_mc_cycles(2);
+        uint32_t in_val2 = pi->ps32_read_32(0x00E90204);
+        TEST_ASSERT((in_val2 & 0xFF) == 0xC3, "GPIO Matrix: GPIO_IN reads physical pins (0xC3)");
+
+        // 5. ESP32 Matrix Mode (Per-Pin Function Selection & Inversion)
+        // Enable Matrix Mode (bit 7 = 1)
+        pi->ps32_write_32(0x00E90200, 0x00000080);
+        // Configure Pin 0 as SPI SCLK (FUNC_SEL=3, OE_MODE=01 force out -> 0x13)
+        pi->ps32_write_32(0x00E90220, 0x00000013);
+        // Configure Pin 1 as SPI CS# (FUNC_SEL=5, OE_MODE=01 force out -> 0x15)
+        pi->ps32_write_32(0x00E90224, 0x00000015);
+        // Configure Pin 7 as Inverted Constant 1 (FUNC_SEL=9, INV=1, force out -> 0x59)
+        pi->ps32_write_32(0x00E9023C, 0x00000059);
+        // Toggle SPI signals via Slave 1: spi_ctrl[0] = SCLK, spi_ctrl[1] = CS#
+        pi->ps32_write_32(0x00E90100, 0x00000001); // SCLK=1, CS#=0
+        pi->flush_pending_writes();
+        harness.run_mc_cycles(2);
+        TEST_ASSERT((dut->SPARE_OUT & 0x01) == 1, "GPIO Matrix: Pin 0 routes SPI SCLK (1)");
+        TEST_ASSERT((dut->SPARE_OUT & 0x02) == 0, "GPIO Matrix: Pin 1 routes SPI CS# (0)");
+        TEST_ASSERT((dut->SPARE_OUT & 0x80) == 0, "GPIO Matrix: Pin 7 inverted constant 1 -> 0");
+
+        pi->ps32_write_32(0x00E90100, 0x00000002); // SCLK=0, CS#=1
+        pi->flush_pending_writes();
+        harness.run_mc_cycles(2);
+        TEST_ASSERT((dut->SPARE_OUT & 0x01) == 0, "GPIO Matrix: Pin 0 routes SPI SCLK (0)");
+        TEST_ASSERT((dut->SPARE_OUT & 0x02) == 2, "GPIO Matrix: Pin 1 routes SPI CS# (1)");
+
+        // 6. Test Unmapped Space ($00E90300) safe termination
+        uint32_t unmapped_val = pi->ps32_read_32(0x00E90300);
+        TEST_ASSERT(unmapped_val == 0, "Wishbone Default Slave: Unmapped address $00E90300 terminates safely returning 0");
     }
 
     // =========================================================================

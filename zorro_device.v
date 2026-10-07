@@ -48,7 +48,16 @@ module zorro_device #(
     input  wire [1:0]  access_size,          // 2'd0 = 8-bit, 2'd1 = 16-bit, 2'd3 = 32-bit
     input  wire [23:0] access_addr,          // Latched Amiga 24-bit physical address
     input  wire [31:0] access_wr_data,       // Latched write data from Pi request buffer
-    output reg  [31:0] access_rd_data = 32'd0// Read data delivered to Pi request buffer
+    output reg  [31:0] access_rd_data = 32'd0,// Read data delivered to Pi request buffer
+
+    // -------------------------------------------------------------------------
+    // Auxiliary / Expansion Port & Debug Wiring (SPARE[7:0] + EMU68 UART)
+    // -------------------------------------------------------------------------
+    input  wire [7:0]  SPARE_IN,             // Live physical pin inputs from expansion header
+    output wire [7:0]  SPARE_OUT,            // Physical pin output drivers
+    output wire [7:0]  SPARE_OE,             // Physical pin output enables (1=Drive, 0=Hi-Z)
+    input  wire        PI_SER_DAT,           // EMU68 serial debug data from Pi (GPIO5)
+    input  wire        PI_SER_CLK            // EMU68 serial debug clock from Pi (GPIO27)
 );
 
     // =========================================================================
@@ -135,6 +144,7 @@ module zorro_device #(
     reg        wb_stb     = 1'b0;
     reg        wb_stb_s0  = 1'b0;
     reg        wb_stb_s1  = 1'b0;
+    reg        wb_stb_s2  = 1'b0;
     reg        wb_stb_def = 1'b0;
     reg        wb_we      = 1'b0;
     reg [15:0] wb_adr     = 16'd0;
@@ -156,6 +166,7 @@ module zorro_device #(
             wb_stb          <= 1'b0;
             wb_stb_s0       <= 1'b0;
             wb_stb_s1       <= 1'b0;
+            wb_stb_s2       <= 1'b0;
             wb_stb_def      <= 1'b0;
             wb_we           <= 1'b0;
             wb_adr          <= 16'd0;
@@ -212,7 +223,8 @@ module zorro_device #(
                             wb_stb     <= 1'b1;
                             wb_stb_s0  <= (access_addr[15:8] == 8'h00);
                             wb_stb_s1  <= (access_addr[15:8] == 8'h01);
-                            wb_stb_def <= (access_addr[15:8] >= 8'h02);
+                            wb_stb_s2  <= (access_addr[15:8] == 8'h02);
+                            wb_stb_def <= (access_addr[15:8] >= 8'h03);
                             wb_we      <= access_wr;
                             wb_adr     <= access_addr[15:0];
 
@@ -251,6 +263,7 @@ module zorro_device #(
                             wb_stb       <= 1'b0;
                             wb_stb_s0    <= 1'b0;
                             wb_stb_s1    <= 1'b0;
+                            wb_stb_s2    <= 1'b0;
                             wb_stb_def   <= 1'b0;
                             access_ready <= 1'b1;
 
@@ -295,6 +308,8 @@ module zorro_device #(
     wire        s0_ack;
     wire [31:0] s1_dat_o;
     wire        s1_ack;
+    wire [31:0] s2_dat_o;
+    wire        s2_ack;
     reg         def_ack = 1'b0;
 
     always @(posedge clk) begin
@@ -304,9 +319,10 @@ module zorro_device #(
             def_ack <= wb_stb_def && !def_ack;
     end
 
-    assign wb_ack = s0_ack | s1_ack | def_ack;
+    assign wb_ack = s0_ack | s1_ack | s2_ack | def_ack;
     assign wb_dat_s2m = s0_ack ? s0_dat_o :
                         s1_ack ? s1_dat_o :
+                        s2_ack ? s2_dat_o :
                         32'h00000000;
 
     // =========================================================================
@@ -331,13 +347,18 @@ module zorro_device #(
     reg        int6_enable   = 1'b0;
 
     wire       s1_irq; // Interrupt line from Slave 1
+    wire       s2_irq; // Interrupt line from Slave 2 (GPIO Matrix)
+    wire [31:0] gpio_int_cfg; // Interrupt configuration from Slave 2
 
     assign s0_ack   = s0_ack_reg;
     assign s0_dat_o = s0_reg_data;
 
     // Active-high interrupt outputs to PS32-lite top-level OR gates
-    assign z2_int2 = int2_pending && int2_enable;
-    assign z2_int6 = int6_pending && int6_enable;
+    wire gpio_to_int2 = s2_irq && (!gpio_int_cfg[16]);
+    wire gpio_to_int6 = s2_irq && (gpio_int_cfg[16]);
+
+    assign z2_int2 = (int2_pending && int2_enable) | gpio_to_int2;
+    assign z2_int6 = (int6_pending && int6_enable) | gpio_to_int6;
 
     always @(posedge clk) begin
         if (reset) begin
@@ -360,7 +381,7 @@ module zorro_device #(
                     4'h1: s0_reg_data <= {Z2_MANUF_ID, Z2_PROD_ID, 8'h01}; // 0x6D743201
                     4'h2: s0_reg_data <= {8'h00, z2_base_addr[23:16], 15'd0, z2_configured};
                     4'h3: s0_reg_data <= z2_scratchpad;
-                    4'h4: s0_reg_data <= {28'd0, s1_irq, 1'b0, int6_pending, int2_pending};
+                    4'h4: s0_reg_data <= {27'd0, s2_irq, s1_irq, 1'b0, int6_pending, int2_pending};
                     4'h5: s0_reg_data <= {30'd0, int6_enable, int2_enable};
                     default: s0_reg_data <= 32'd0;
                 endcase
@@ -461,5 +482,288 @@ module zorro_device #(
             end
         end
     end
+
+    wire spi_sclk = spi_ctrl[0];
+    wire spi_mosi = spi_data[0];
+    wire spi_cs_n = spi_ctrl[1];
+    wire spi_miso;
+
+    // =========================================================================
+    // SECTION 6: Slave 2 - ESP32-Style GPIO Matrix & IO MUX ($0200..$02FF)
+    //
+    // Flexible I/O multiplexer allowing any expansion port pin (SPARE[7:0]) to
+    // be routed to GPIO, Raspberry Pi Debug (EMU68 UART), SPI Master, or IRQ.
+    // Supports ESP32-style per-pin function selection, atomic bit-set/clear,
+    // direction control, output inversion, and open-drain emulation.
+    // =========================================================================
+    reg        s2_ack_reg  = 1'b0;
+    reg [31:0] s2_reg_data = 32'd0;
+
+    // Slave 2 Registers
+    reg [31:0] iomux_ctrl        = 32'd0;        // $00: Mode & Matrix enable
+    reg [7:0]  gpio_out          = 8'hFF;        // $08: GPIO output register
+    reg [7:0]  gpio_oe           = 8'hFF;        // $14: GPIO direction register (1=out, 0=in)
+    reg [7:0]  pin_cfg [7:0];                    // $20..$3C: Per-pin configuration
+    reg [31:0] in_mat_sel        = 32'h00000004; // $40: Input Matrix (MISO default Pin 4)
+    reg [31:0] gpio_int_cfg_reg  = 32'd0;        // $44: Interrupt configuration
+    reg [7:0]  gpio_int_pending  = 8'd0;         // $48: Interrupt status (W1C)
+    // -------------------------------------------------------------------------
+    // SPARE_IN 2-Stage Synchronizer & Edge Detection
+    // -------------------------------------------------------------------------
+    reg [7:0] spare_sync_0    = 8'd0;
+    reg [7:0] spare_sync_1    = 8'd0;
+    reg [7:0] spare_sync_2    = 8'd0;
+    reg [7:0] gpio_triggers_q = 8'd0;
+
+    always @(posedge clk) begin
+        spare_sync_0    <= SPARE_IN;
+        spare_sync_1    <= spare_sync_0;
+        spare_sync_2    <= spare_sync_1;
+        gpio_triggers_q <= ((gpio_int_cfg_reg[15:8] & (spare_sync_1 & ~spare_sync_2)) |
+                            (~gpio_int_cfg_reg[15:8] & spare_sync_1)) & gpio_int_cfg_reg[7:0];
+    end
+
+    // Peripheral Input Routing via Input Matrix (using synchronized inputs)
+    wire [2:0] miso_pin_sel = in_mat_sel[2:0];
+    wire       raw_miso     = spare_sync_1[miso_pin_sel];
+    assign     spi_miso     = in_mat_sel[6] ? ~raw_miso : raw_miso;
+
+    assign gpio_int_cfg = gpio_int_cfg_reg;
+    assign s2_ack       = s2_ack_reg;
+    assign s2_dat_o     = s2_reg_data;
+    assign s2_irq       = |gpio_int_pending;
+
+    always @(posedge clk) begin
+        if (reset) begin
+            s2_ack_reg        <= 1'b0;
+            s2_reg_data       <= 32'd0;
+            iomux_ctrl        <= 32'd0;
+            gpio_out          <= 8'hFF;
+            gpio_oe           <= 8'hFF;
+            pin_cfg[0]        <= 8'h01; // Pin 0: PI_SER_DAT
+            pin_cfg[1]        <= 8'h02; // Pin 1: PI_SER_CLK
+            pin_cfg[2]        <= 8'h00; // Pin 2: GPIO
+            pin_cfg[3]        <= 8'h00; // Pin 3: GPIO
+            pin_cfg[4]        <= 8'h00; // Pin 4: GPIO
+            pin_cfg[5]        <= 8'h00; // Pin 5: GPIO
+            pin_cfg[6]        <= 8'h00; // Pin 6: GPIO
+            pin_cfg[7]        <= 8'h00; // Pin 7: GPIO
+            in_mat_sel        <= 32'h00000004;
+            gpio_int_cfg_reg  <= 32'd0;
+            gpio_int_pending  <= 8'd0;
+        end else begin
+            s2_ack_reg <= 1'b0;
+
+            // Accumulate pending interrupts from pipelined triggers (supports W1C in write block)
+            gpio_int_pending <= gpio_int_pending | gpio_triggers_q;
+
+            if (wb_stb_s2 && !s2_ack_reg) begin
+                s2_ack_reg <= 1'b1;
+
+                // Read Multiplexer ($0200..$02FF)
+                // Upper 24 bits [31:8]: Only 3 valid 32-bit registers (iomux_ctrl, in_mat_sel, gpio_int_cfg_reg)
+                // drastically reducing logic depth and wb_adr fanout for timing closure.
+                case (wb_adr[6:2])
+                    5'h00:   s2_reg_data[31:8] <= iomux_ctrl[31:8];
+                    5'h10:   s2_reg_data[31:8] <= in_mat_sel[31:8];
+                    5'h11:   s2_reg_data[31:8] <= gpio_int_cfg_reg[31:8];
+                    default: s2_reg_data[31:8] <= 24'd0;
+                endcase
+
+                // Lower 8 bits [7:0]: All registers mapped to LSB
+                case (wb_adr[6:2])
+                    5'h00:   s2_reg_data[7:0] <= iomux_ctrl[7:0];
+                    5'h01:   s2_reg_data[7:0] <= spare_sync_1;
+                    5'h02:   s2_reg_data[7:0] <= gpio_out;
+                    5'h05:   s2_reg_data[7:0] <= gpio_oe;
+                    5'h08:   s2_reg_data[7:0] <= pin_cfg[0];
+                    5'h09:   s2_reg_data[7:0] <= pin_cfg[1];
+                    5'h0A:   s2_reg_data[7:0] <= pin_cfg[2];
+                    5'h0B:   s2_reg_data[7:0] <= pin_cfg[3];
+                    5'h0C:   s2_reg_data[7:0] <= pin_cfg[4];
+                    5'h0D:   s2_reg_data[7:0] <= pin_cfg[5];
+                    5'h0E:   s2_reg_data[7:0] <= pin_cfg[6];
+                    5'h0F:   s2_reg_data[7:0] <= pin_cfg[7];
+                    5'h10:   s2_reg_data[7:0] <= in_mat_sel[7:0];
+                    5'h11:   s2_reg_data[7:0] <= gpio_int_cfg_reg[7:0];
+                    5'h12:   s2_reg_data[7:0] <= gpio_int_pending;
+                    default: s2_reg_data[7:0] <= 8'd0;
+                endcase
+
+                // Write Handling
+                if (wb_we) begin
+                    case (wb_adr[6:2])
+                        5'h00: begin // IOMUX_CTRL
+                            if (wb_sel[0]) iomux_ctrl[7:0]   <= wb_dat_m2s[7:0];
+                            if (wb_sel[1]) iomux_ctrl[15:8]  <= wb_dat_m2s[15:8];
+                            if (wb_sel[2]) iomux_ctrl[23:16] <= wb_dat_m2s[23:16];
+                            if (wb_sel[3]) iomux_ctrl[31:24] <= wb_dat_m2s[31:24];
+                        end
+                        5'h02: begin // GPIO_OUT (Direct Write)
+                            if (|wb_sel) gpio_out <= wb_dat_m2s[7:0];
+                        end
+                        5'h03: begin // GPIO_OUT_SET (W1TS - Atomic Bit Set)
+                            if (|wb_sel) gpio_out <= gpio_out | wb_dat_m2s[7:0];
+                        end
+                        5'h04: begin // GPIO_OUT_CLR (W1TC - Atomic Bit Clear)
+                            if (|wb_sel) gpio_out <= gpio_out & ~wb_dat_m2s[7:0];
+                        end
+                        5'h05: begin // GPIO_DIR (Direct Write)
+                            if (|wb_sel) gpio_oe <= wb_dat_m2s[7:0];
+                        end
+                        5'h06: begin // GPIO_DIR_SET (W1TS - Atomic Direction Set)
+                            if (|wb_sel) gpio_oe <= gpio_oe | wb_dat_m2s[7:0];
+                        end
+                        5'h07: begin // GPIO_DIR_CLR (W1TC - Atomic Direction Clear)
+                            if (|wb_sel) gpio_oe <= gpio_oe & ~wb_dat_m2s[7:0];
+                        end
+                        5'h08: if (|wb_sel) pin_cfg[0] <= wb_dat_m2s[7:0]; // PIN_CFG0
+                        5'h09: if (|wb_sel) pin_cfg[1] <= wb_dat_m2s[7:0]; // PIN_CFG1
+                        5'h0A: if (|wb_sel) pin_cfg[2] <= wb_dat_m2s[7:0]; // PIN_CFG2
+                        5'h0B: if (|wb_sel) pin_cfg[3] <= wb_dat_m2s[7:0]; // PIN_CFG3
+                        5'h0C: if (|wb_sel) pin_cfg[4] <= wb_dat_m2s[7:0]; // PIN_CFG4
+                        5'h0D: if (|wb_sel) pin_cfg[5] <= wb_dat_m2s[7:0]; // PIN_CFG5
+                        5'h0E: if (|wb_sel) pin_cfg[6] <= wb_dat_m2s[7:0]; // PIN_CFG6
+                        5'h0F: if (|wb_sel) pin_cfg[7] <= wb_dat_m2s[7:0]; // PIN_CFG7
+                        5'h10: begin // IN_MAT_SEL
+                            if (wb_sel[0]) in_mat_sel[7:0]   <= wb_dat_m2s[7:0];
+                            if (wb_sel[1]) in_mat_sel[15:8]  <= wb_dat_m2s[15:8];
+                            if (wb_sel[2]) in_mat_sel[23:16] <= wb_dat_m2s[23:16];
+                            if (wb_sel[3]) in_mat_sel[31:24] <= wb_dat_m2s[31:24];
+                        end
+                        5'h11: begin // GPIO_INT_CFG
+                            if (wb_sel[0]) gpio_int_cfg_reg[7:0]   <= wb_dat_m2s[7:0];
+                            if (wb_sel[1]) gpio_int_cfg_reg[15:8]  <= wb_dat_m2s[15:8];
+                            if (wb_sel[2]) gpio_int_cfg_reg[23:16] <= wb_dat_m2s[23:16];
+                            if (wb_sel[3]) gpio_int_cfg_reg[31:24] <= wb_dat_m2s[31:24];
+                        end
+                        5'h12: begin // GPIO_INT_STATUS (W1C)
+                            if (|wb_sel) gpio_int_pending <= (gpio_int_pending & ~wb_dat_m2s[7:0]) | gpio_triggers_q;
+                        end
+                    endcase
+                end
+            end
+        end
+    end
+
+    // =========================================================================
+    // SECTION 7: Output & Direction Multiplexing Logic
+    // =========================================================================
+    wire is_matrix_mode = (iomux_ctrl[2:0] == 3'd7) || iomux_ctrl[7];
+
+    // Function multiplexer for each of the 8 pins in Matrix Mode
+    function get_pin_func_val;
+        input [3:0] func;
+        input [2:0] pin_idx;
+        case (func)
+            4'h0: get_pin_func_val = gpio_out[pin_idx];
+            4'h1: get_pin_func_val = PI_SER_DAT;
+            4'h2: get_pin_func_val = PI_SER_CLK;
+            4'h3: get_pin_func_val = spi_sclk;
+            4'h4: get_pin_func_val = spi_mosi;
+            4'h5: get_pin_func_val = spi_cs_n;
+            4'h6: get_pin_func_val = z2_int2;
+            4'h7: get_pin_func_val = z2_int6;
+            4'h8: get_pin_func_val = 1'b0;
+            4'h9: get_pin_func_val = 1'b1;
+            default: get_pin_func_val = 1'b0;
+        endcase
+    endfunction
+
+    reg [7:0] raw_out;
+    reg [7:0] raw_oe;
+    reg       func_bit;
+    integer p;
+
+    always @(*) begin
+        if (is_matrix_mode) begin
+            // -----------------------------------------------------------------
+            // Full ESP32-Style GPIO Matrix Mode
+            // -----------------------------------------------------------------
+            for (p = 0; p < 8; p = p + 1) begin
+                // 1. Function Selection
+                func_bit = get_pin_func_val(pin_cfg[p][3:0], p[2:0]);
+
+                // 2. Inversion
+                if (pin_cfg[p][6])
+                    func_bit = ~func_bit;
+                raw_out[p] = func_bit;
+
+                // 3. Direction / Output Enable Mode
+                case (pin_cfg[p][5:4])
+                    2'b00: raw_oe[p] = gpio_oe[p]; // Follow GPIO_DIR
+                    2'b01: raw_oe[p] = 1'b1;       // Force Output
+                    2'b10: raw_oe[p] = 1'b0;       // Force Input (Hi-Z)
+                    2'b11: begin                   // Auto Peripheral
+                        case (pin_cfg[p][3:0])
+                            4'h3, 4'h4, 4'h5: raw_oe[p] = 1'b1; // SPI outputs
+                            default: raw_oe[p] = gpio_oe[p];
+                        endcase
+                    end
+                endcase
+
+                // 4. Open-Drain Emulation: if open-drain enabled and output is high, float (OE=0)
+                if (pin_cfg[p][7] && raw_out[p])
+                    raw_oe[p] = 1'b0;
+            end
+        end else begin
+            // -----------------------------------------------------------------
+            // Preset Modes (0 = Default, 1 = All GPIO, 2 = SPI+Debug, 3 = SPI Full)
+            // -----------------------------------------------------------------
+            case (iomux_ctrl[2:0])
+                3'd0: begin // Mode 0: Default (Debug on 0/1, 6 GPIOs on 7:2)
+                    raw_out[0] = PI_SER_DAT;
+                    raw_oe[0]  = 1'b1;
+                    raw_out[1] = PI_SER_CLK;
+                    raw_oe[1]  = 1'b1;
+                    raw_out[7:2] = gpio_out[7:2];
+                    raw_oe[7:2]  = gpio_oe[7:2];
+                end
+
+                3'd1: begin // Mode 1: All GPIO (Debug Disabled)
+                    raw_out = gpio_out;
+                    raw_oe  = gpio_oe;
+                end
+
+                3'd2: begin // Mode 2: SPI Master + Debug
+                    raw_out[0] = PI_SER_DAT;
+                    raw_oe[0]  = 1'b1;
+                    raw_out[1] = PI_SER_CLK;
+                    raw_oe[1]  = 1'b1;
+                    raw_out[2] = spi_cs_n;
+                    raw_oe[2]  = 1'b1;
+                    raw_out[3] = spi_sclk;
+                    raw_oe[3]  = 1'b1;
+                    raw_out[4] = spi_mosi;
+                    raw_oe[4]  = 1'b1;
+                    raw_out[5] = 1'b0;
+                    raw_oe[5]  = 1'b0; // Input for MISO
+                    raw_out[7:6] = gpio_out[7:6];
+                    raw_oe[7:6]  = gpio_oe[7:6];
+                end
+
+                3'd3: begin // Mode 3: SPI Master Full (No Debug)
+                    raw_out[0] = spi_cs_n;
+                    raw_oe[0]  = 1'b1;
+                    raw_out[1] = spi_sclk;
+                    raw_oe[1]  = 1'b1;
+                    raw_out[2] = spi_mosi;
+                    raw_oe[2]  = 1'b1;
+                    raw_out[3] = 1'b0;
+                    raw_oe[3]  = 1'b0; // Input for MISO
+                    raw_out[7:4] = gpio_out[7:4];
+                    raw_oe[7:4]  = gpio_oe[7:4];
+                end
+
+                default: begin
+                    raw_out = gpio_out;
+                    raw_oe  = gpio_oe;
+                end
+            endcase
+        end
+    end
+
+    assign SPARE_OUT = raw_out;
+    assign SPARE_OE  = raw_oe;
 
 endmodule

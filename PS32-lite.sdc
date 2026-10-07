@@ -18,6 +18,7 @@ set_false_path -from [get_ports {SPARE_IN[*]}]
 
 # Static / Asynchronous output signals
 set_false_path -to [get_ports {SPARE_OUT[*]}]
+set_false_path -to [get_ports {SPARE_OE[*]}]
 set_false_path -to [get_ports {PI_KBRESET}]
 
 # Quasi-static configuration register bits from Raspberry Pi

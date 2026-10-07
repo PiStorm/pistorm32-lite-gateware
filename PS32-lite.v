@@ -103,12 +103,6 @@ module pistorm (
     input  wire         AMIPLL_CLKOUT0      // Main FPGA system clock (~182 MHz PLL)
 );
 
-// Spare port assignments & EMU68 UART pass-through
-assign SPARE_OUT[7:2] = 6'b111111;
-assign SPARE_OE       = 8'b11111111;
-assign SPARE_OUT[0]   = PI_SER_DAT;
-assign SPARE_OUT[1]   = PI_SER_CLK;
-
 // =============================================================================
 // Internal Clock & Interconnect Wiring
 // =============================================================================
@@ -278,7 +272,14 @@ zorro_device #(
     .access_size          (z2_access_size),
     .access_addr          (z2_access_addr),
     .access_wr_data       (z2_access_wr_data),
-    .access_rd_data       (z2_rd_data)
+    .access_rd_data       (z2_rd_data),
+
+    // Auxiliary / Expansion Port & Debug Wiring (SPARE[7:0] + EMU68 UART)
+    .SPARE_IN             (SPARE_IN),
+    .SPARE_OUT            (SPARE_OUT),
+    .SPARE_OE             (SPARE_OE),
+    .PI_SER_DAT           (PI_SER_DAT),
+    .PI_SER_CLK           (PI_SER_CLK)
 );
 
 // 3. MC68020 Bus Master Interface Submodule
