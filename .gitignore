@@ -13,3 +13,5 @@ view.gtkw
 *.vcd
 *.1
 *.json
+obj_dir/
+tb_pistorm32
