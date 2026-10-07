@@ -120,7 +120,17 @@ module m68k_interface (
     output reg  [1:0]  z2_access_size = 2'd0,          // 0=Byte, 1=Word, 3=Long
     output reg  [23:0] z2_access_addr = 24'd0,         // Physical address
     output reg  [31:0] z2_access_wr_data = 32'd0,      // Write data
-    input  wire [31:0] z2_rd_data                      // Read data from zorro_device
+    input  wire [31:0] z2_rd_data,                     // Read data from zorro_device
+
+    // -------------------------------------------------------------------------
+    // Hardware Diagnostic & Telemetry Interface (to zorro_device)
+    // -------------------------------------------------------------------------
+    output wire [31:0] prefetch_launch_count,
+    output wire [31:0] prefetch_hit_count,
+    output wire [31:0] diag_status,
+    output wire [31:0] diag_bus_capture,
+    input  wire        prefetch_ctrl_en,
+    input  wire        counter_clear
 );
 
 // Bus control outputs
@@ -232,7 +242,7 @@ module m68k_interface (
     reg [1:0] port_width;
     always @(*) begin
         case (mc_dsack_n_sync)
-            2'b11: port_width = 2'bx; // Wait state
+            2'b11: port_width = 2'd0; // Wait state / default
             2'b10: port_width = 2'd0; // 8-bit port
             2'b01: port_width = 2'd1; // 16-bit port
             2'b00: port_width = 2'd3; // 32-bit port
@@ -260,7 +270,7 @@ module m68k_interface (
     reg         next_prefetch_allowed = 1'b0;// Safety gate preventing illegal prefetch
     reg [23:0]  chained_prefetch_addr = 24'd0;// Next chained prefetch address
     reg         chained_prefetch_allowed = 1'b0;
-    reg         can_prefetch = 1'b0;         // Trigger prefetch when bus is idle
+    wire        can_prefetch;                // Trigger prefetch when bus is idle
     reg [1:0]   req_prefetch_hit = 2'b00;    // Slot 0 / 1 hit flags (locally cached)
     reg [1:0]   latched_port_width = 2'd0;   // Captured during active /AS (S5)
     reg [1:0]   latched_size = 2'd0;         // Captured transfer size (S5)
@@ -413,6 +423,65 @@ module m68k_interface (
                                      data_read;
     assign slot_complete_normally  = normal_cycle_terminate ? terminated_normally : 1'b1;
 
+    // Effective prefetch enable controlled by both Pi register and Zorro register override
+    wire enable_prefetch_eff = enable_prefetch && prefetch_ctrl_en;
+
+    // Prefetch telemetry counters
+    reg [31:0] r_prefetch_launch_count = 32'd0;
+    reg [31:0] r_prefetch_hit_count    = 32'd0;
+
+    assign prefetch_launch_count = r_prefetch_launch_count;
+    assign prefetch_hit_count    = r_prefetch_hit_count;
+
+    reg [1:0]  diag_dsack_at_term = 2'b11;
+    reg [1:0]  diag_dsack_at_s4   = 2'b11;
+    reg [1:0]  diag_dsack_at_s5   = 2'b11;
+    reg [1:0]  diag_port_width_s5 = 2'd0;
+    reg [1:0]  diag_size_s5       = 2'd0;
+    reg        diag_term_eligible = 1'b0;
+    reg        diag_size_le       = 1'b0;
+    reg        diag_term_norm     = 1'b0;
+    reg        diag_rw            = 1'b0;
+    reg [7:0]  diag_addr_lo       = 8'd0;
+    reg [7:0]  diag_cycle_count   = 8'd0;
+
+    assign diag_bus_capture = {
+        diag_cycle_count,    // [31:24]
+        diag_addr_lo,        // [23:16]
+        diag_rw,             // [15]
+        diag_term_norm,      // [14]
+        diag_size_le,        // [13]
+        diag_term_eligible,  // [12]
+        diag_size_s5,        // [11:10]
+        diag_port_width_s5,  // [9:8]
+        diag_dsack_at_s5,    // [7:6]
+        diag_dsack_at_s4,    // [5:4]
+        diag_dsack_at_term,  // [3:2]
+        mc_dsack_n_sync      // [1:0]
+    };
+
+    assign diag_status = {
+        halt_sync,
+        reset_sync,
+        cur_req_hit,
+        cur_req_int,
+        cur_req_act,
+        terminated_normally,
+        mc_dsack_n_sync,
+        is_bm,
+        enable_prefetch_eff,
+        next_prefetch_allowed,
+        chained_prefetch_allowed,
+        can_prefetch,
+        prefetch_valid,
+        is_prefetch_cycle,
+        req_prefetch_hit,
+        prefetch_eligible,
+        latched_size[1:0],
+        latched_port_width[1:0],
+        state[9:0]
+    };
+
     // Prefetch Safety Filter:
     // Only prefetch from Chip-RAM ($000000..$1FFFFF) or Expansion RAM ($E00000..$FFFFFF).
     // NEVER speculatively prefetch from CIA ($BFExxx) or Custom Registers ($DFFxxx)!
@@ -421,22 +490,23 @@ module m68k_interface (
                                  ((address[23:21] == 3'b000) || (&address[23:19]));
 
     // Prefetch hit detection qualification signals
-    wire req_prefetch_qual = enable_prefetch && prefetch_valid && new_req_rw &&
+    wire req_prefetch_qual = enable_prefetch_eff && prefetch_valid && new_req_rw &&
                              (new_req_size == 2'd3) &&
                              (new_req_addr[23:16] == prefetch_addr[23:16]);
     wire slot0_addr_match  = (req_address_0[15:0] == prefetch_addr[15:0]);
     wire slot1_addr_match  = (req_address_1[15:0] == prefetch_addr[15:0]);
 
+    // Prefetch Trigger Qualification Signal:
+    // Speculative read is launched when enabled, FPGA owns the bus (is_bm),
+    // previous cycle qualified as safe (Chip-RAM or Exp-RAM 32-bit read),
+    // buffer does not already hold valid data, and next prefetch is allowed.
+    assign can_prefetch = enable_prefetch_eff && is_bm && prefetch_eligible &&
+                          !prefetch_valid && next_prefetch_allowed;
+
     // =========================================================================
     // SECTION 7: Main FSM Synchronous State Engine
     // =============================================================================
     always @(posedge clk) begin
-        // Evaluate idle speculative prefetch readiness:
-        // Prefetch is triggered only when enabled, FPGA owns the bus (is_bm),
-        // previous cycle qualified as safe (Chip-RAM or Exp-RAM 32-bit read),
-        // buffer does not already hold valid data, and target address is in safe memory.
-        can_prefetch <= enable_prefetch && is_bm && prefetch_eligible &&
-                        !prefetch_valid && next_prefetch_allowed;
 
         // Manual slot execution pointer override from PI_REG_SLOT
         if (set_execute_slot_valid) begin
@@ -467,12 +537,8 @@ module m68k_interface (
                         // Case A: Virtual Zorro AutoConfig & 64KB I/O Space
                         // Routed entirely inside FPGA logic (zorro_device.v);
                         // physical Amiga 68020 bus remains idle/unaffected.
+                        // Prefetch state for Amiga Chip RAM is preserved.
                         // -----------------------------------------------------
-                        prefetch_valid    <= 1'b0;
-                        prefetch_eligible <= 1'b0;
-                        is_prefetch_cycle <= 1'b0;
-                        req_prefetch_hit  <= 2'b00;
-
                         z2_access_addr    <= cur_req_addr;
                         z2_access_wr_data <= cur_req_data;
                         z2_access_size    <= cur_req_size;
@@ -487,6 +553,7 @@ module m68k_interface (
                         // The requested 32-bit data was already read into FPGA
                         // prefetch buffer during idle cycles. Immediate completion!
                         // -----------------------------------------------------
+                        r_prefetch_hit_count <= r_prefetch_hit_count + 32'd1;
                         req_prefetch_hit[current_execute_slot_ctrl] <= 1'b0;
                         if (increment_execute_slot_pointer) begin
                             current_execute_slot          <= current_execute_slot + 1'd1;
@@ -499,12 +566,13 @@ module m68k_interface (
                         // Chained prefetch: if next address is still in safe RAM,
                         // immediately kick off the subsequent speculative read
                         if (chained_prefetch_allowed && is_bm) begin
-                            address           <= chained_prefetch_addr;
-                            fc                <= 3'd1; // User Data space
-                            size              <= 2'd3; // 32-bit longword
-                            rw                <= 1'b1; // Read
-                            is_prefetch_cycle <= 1'b1;
-                            state             <= STATE_WAIT_BUS_CYCLE_START;
+                            address                 <= chained_prefetch_addr;
+                            fc                      <= 3'd1; // User Data space
+                            size                    <= 2'd3; // 32-bit longword
+                            rw                      <= 1'b1; // Read
+                            is_prefetch_cycle       <= 1'b1;
+                            r_prefetch_launch_count <= r_prefetch_launch_count + 32'd1;
+                            state                   <= STATE_WAIT_BUS_CYCLE_START;
                         end else begin
                             is_prefetch_cycle <= 1'b0;
                             prefetch_eligible <= 1'b0;
@@ -516,10 +584,12 @@ module m68k_interface (
                         // Case C: Normal Physical MC68020 Bus Access (Miss or Write)
                         // Invalidate prefetch buffer and dispatch physical cycle.
                         // -----------------------------------------------------
-                        prefetch_valid    <= 1'b0;
-                        prefetch_eligible <= 1'b0;
-                        is_prefetch_cycle <= 1'b0;
-                        req_prefetch_hit  <= 2'b00;
+                        prefetch_valid           <= 1'b0;
+                        prefetch_eligible        <= 1'b0;
+                        next_prefetch_allowed    <= 1'b0;
+                        chained_prefetch_allowed <= 1'b0;
+                        is_prefetch_cycle        <= 1'b0;
+                        req_prefetch_hit         <= 2'b00;
 
                         fc         <= cur_req_fc;
                         address    <= cur_req_addr;
@@ -534,14 +604,15 @@ module m68k_interface (
                     // Case D: Bus Master is Idle, Launch Speculative Read-Ahead
                     // Speculatively fetch [address + 4] while Pi prepares next op.
                     // ---------------------------------------------------------
-                    can_prefetch      <= 1'b0;
-                    prefetch_eligible <= 1'b0;
-                    address           <= next_prefetch_addr;
-                    fc                <= 3'd1; // User Data space
-                    size              <= 2'd3; // 32-bit longword
-                    rw                <= 1'b1; // Read
-                    is_prefetch_cycle <= 1'b1;
-                    state             <= STATE_WAIT_BUS_CYCLE_START;
+                    prefetch_eligible       <= 1'b0;
+                    next_prefetch_allowed   <= 1'b0;
+                    address                 <= next_prefetch_addr;
+                    fc                      <= 3'd1; // User Data space
+                    size                    <= 2'd3; // 32-bit longword
+                    rw                      <= 1'b1; // Read
+                    is_prefetch_cycle       <= 1'b1;
+                    r_prefetch_launch_count <= r_prefetch_launch_count + 32'd1;
+                    state                   <= STATE_WAIT_BUS_CYCLE_START;
                 end
             end
 
@@ -647,8 +718,10 @@ module m68k_interface (
                     if (!rw)
                         mc_ds <= 1'b1;
                 end
-                if (any_termination)
+                if (any_termination) begin
+                    diag_dsack_at_term <= mc_dsack_n_sync;
                     state <= STATE_S4_NOP;
+                end
             end
 
             // -----------------------------------------------------------------
@@ -657,8 +730,10 @@ module m68k_interface (
             // integrity and bus stability across legacy Amiga expansion boards.
             // -----------------------------------------------------------------
             state[STATE_BIT_S4_NOP]: begin
-                if (falling)
+                if (falling) begin
+                    diag_dsack_at_s4 <= mc_dsack_n_sync;
                     state <= STATE_WAIT_LATCH_DATA;
+                end
             end
 
             // -----------------------------------------------------------------
@@ -681,6 +756,13 @@ module m68k_interface (
                     size_le_transfered <= (size <= (port_width - (address[1:0] & port_width)));
                     latched_port_width <= port_width;
                     latched_size       <= size;
+
+                    diag_dsack_at_s5   <= mc_dsack_n_sync;
+                    diag_port_width_s5 <= port_width;
+                    diag_size_s5       <= size;
+                    diag_rw            <= rw;
+                    diag_addr_lo       <= address[7:0];
+                    diag_cycle_count   <= diag_cycle_count + 8'd1;
 
                     if (rw)
                         state <= STATE_UPDATE_DATA_READ;
@@ -796,9 +878,9 @@ module m68k_interface (
                             prefetch_addr            <= address;
                             prefetch_valid           <= 1'b1;
                             chained_prefetch_allowed <= ((address[23:21] == 3'b000) || (&address[23:19]));
-                            req_prefetch_hit[0]      <= enable_prefetch && req_active[0] && req_rw_0 &&
+                            req_prefetch_hit[0]      <= enable_prefetch_eff && req_active[0] && req_rw_0 &&
                                                        (req_address_0 == address) && (req_size_0 == 2'd3);
-                            req_prefetch_hit[1]      <= enable_prefetch && req_active[1] && req_rw_1 &&
+                            req_prefetch_hit[1]      <= enable_prefetch_eff && req_active[1] && req_rw_1 &&
                                                        (req_address_1 == address) && (req_size_1 == 2'd3);
                         end else begin
                             prefetch_valid   <= 1'b0;
@@ -815,6 +897,9 @@ module m68k_interface (
                     end
                 end else begin
                     if (!terminated_normally || size_le_transfered) begin
+                        diag_term_eligible <= prefetch_eligible_term;
+                        diag_size_le       <= size_le_transfered;
+                        diag_term_norm     <= terminated_normally;
                         next_prefetch_addr <= address + 24'd4;
                         if (increment_execute_slot_pointer) begin
                             current_execute_slot          <= current_execute_slot + 1'd1;
@@ -876,19 +961,22 @@ module m68k_interface (
                 req_prefetch_hit[1] <= req_prefetch_qual && slot1_addr_match;
         end
 
-        // Bus loss, Reset, or Halt safety: flush prefetch cache
-        if (!request_bm || reset_sync || halt_sync || !is_bm) begin
+        // Bus loss or Reset safety: flush prefetch cache
+        if (!request_bm || reset_sync || !is_bm) begin
             prefetch_valid           <= 1'b0;
             prefetch_eligible        <= 1'b0;
-            can_prefetch             <= 1'b0;
             next_prefetch_allowed    <= 1'b0;
             chained_prefetch_allowed <= 1'b0;
             req_prefetch_hit         <= 2'b00;
-            latched_port_width       <= 2'd0;
-            latched_size             <= 2'd0;
         end
 
-        // Hard reset initialization of internal Zorro transfer registers
+        // Hard reset initialization of internal Zorro transfer registers & counters
+        if (reset_sync || drive_reset || counter_clear) begin
+            r_prefetch_launch_count <= 32'd0;
+            r_prefetch_hit_count    <= 32'd0;
+            diag_cycle_count        <= 8'd0;
+        end
+
         if (reset_sync || drive_reset) begin
             z2_access_valid   <= 1'b0;
             z2_access_addr    <= 24'd0;

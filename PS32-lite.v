@@ -154,6 +154,16 @@ wire [23:0] z2_access_addr;                 // Physical address
 wire [31:0] z2_access_wr_data;              // Data to write to scratchpad / config
 wire [31:0] z2_rd_data;                     // Data read from AutoConfig ROM or IO regs
 
+// -----------------------------------------------------------------------------
+// Hardware Diagnostic & Telemetry Interface
+// -----------------------------------------------------------------------------
+wire [31:0] prefetch_launch_count;
+wire [31:0] prefetch_hit_count;
+wire [31:0] diag_status;
+wire [31:0] diag_bus_capture;
+wire        prefetch_ctrl_en;
+wire        counter_clear;
+
 // 1. Raspberry Pi Interface Submodule
 pi_interface u_pi (
     .clk                            (clk),
@@ -254,7 +264,15 @@ zorro_device #(
     .SPARE_OUT            (SPARE_OUT),
     .SPARE_OE             (SPARE_OE),
     .PI_SER_DAT           (PI_SER_DAT),
-    .PI_SER_CLK           (PI_SER_CLK)
+    .PI_SER_CLK           (PI_SER_CLK),
+
+    // Hardware Diagnostic & Telemetry Interface
+    .prefetch_launch_count(prefetch_launch_count),
+    .prefetch_hit_count   (prefetch_hit_count),
+    .diag_status          (diag_status),
+    .diag_bus_capture     (diag_bus_capture),
+    .prefetch_ctrl_en     (prefetch_ctrl_en),
+    .counter_clear        (counter_clear)
 );
 
 // 3. MC68020 Bus Master Interface Submodule
@@ -355,7 +373,15 @@ m68k_interface u_m68k (
     .z2_access_size                 (z2_access_size),
     .z2_access_addr                 (z2_access_addr),
     .z2_access_wr_data              (z2_access_wr_data),
-    .z2_rd_data                     (z2_rd_data)
+    .z2_rd_data                     (z2_rd_data),
+
+    // Hardware Diagnostic & Telemetry Interface
+    .prefetch_launch_count          (prefetch_launch_count),
+    .prefetch_hit_count             (prefetch_hit_count),
+    .diag_status                    (diag_status),
+    .diag_bus_capture               (diag_bus_capture),
+    .prefetch_ctrl_en               (prefetch_ctrl_en),
+    .counter_clear                  (counter_clear)
 );
 
 endmodule

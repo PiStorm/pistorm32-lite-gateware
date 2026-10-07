@@ -16,3 +16,4 @@ view.gtkw
 obj_dir/
 obj_dir_golden/
 tb_pistorm32
+bench/pistorm_bench

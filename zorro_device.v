@@ -44,7 +44,17 @@ module zorro_device #(
     output wire [7:0]  SPARE_OUT,            // Physical pin output drivers
     output wire [7:0]  SPARE_OE,             // Physical pin output enables (1=Drive, 0=Hi-Z)
     input  wire        PI_SER_DAT,           // EMU68 serial debug data from Pi (GPIO5)
-    input  wire        PI_SER_CLK            // EMU68 serial debug clock from Pi (GPIO27)
+    input  wire        PI_SER_CLK,           // EMU68 serial debug clock from Pi (GPIO27)
+
+    // -------------------------------------------------------------------------
+    // Hardware Diagnostic & Telemetry Interface (from/to m68k_interface)
+    // -------------------------------------------------------------------------
+    input  wire [31:0] prefetch_launch_count,
+    input  wire [31:0] prefetch_hit_count,
+    input  wire [31:0] diag_status,
+    input  wire [31:0] diag_bus_capture,
+    output reg         prefetch_ctrl_en = 1'b1,
+    output reg         counter_clear = 1'b0
 );
 
     // =========================================================================
@@ -140,6 +150,14 @@ module zorro_device #(
     wire [31:0] wb_dat_s2m;
     wire        wb_ack;
 
+    // AutoConfig byte/word write extraction (safe against unwritten DATA_HI)
+    wire [7:0] ac_wr_byte = (access_wr_data[7:0] != 8'h00) ? access_wr_data[7:0] : access_wr_data[15:8];
+    wire [3:0] ac_byte_hi = ac_wr_byte[7:4];
+    wire [3:0] ac_byte_lo = ac_wr_byte[3:0];
+
+    reg base_hi_written = 1'b0;
+    reg base_lo_written = 1'b0;
+
     // -------------------------------------------------------------------------
     // Main Handshake & Wishbone Master State Machine
     // -------------------------------------------------------------------------
@@ -148,6 +166,8 @@ module zorro_device #(
             z2_configured   <= 1'b0;
             z2_shutup       <= 1'b0;
             z2_base_addr    <= 24'd0;
+            base_hi_written <= 1'b0;
+            base_lo_written <= 1'b0;
             wb_state        <= WB_IDLE;
             wb_cyc          <= 1'b0;
             wb_stb          <= 1'b0;
@@ -175,24 +195,38 @@ module zorro_device #(
                     if (access_wr) begin
                         if (access_size == 2'd3 && access_addr[6:1] == 6'h24) begin
                             // 32-bit write to $48 sets both Base High & Base Low
-                            z2_base_addr[23:20] <= access_wr_data[31:28] | access_wr_data[27:24];
-                            z2_base_addr[19:16] <= access_wr_data[23:20] | access_wr_data[19:16];
+                            z2_base_addr[23:20] <= access_wr_data[31:28];
+                            z2_base_addr[19:16] <= access_wr_data[27:24];
                             z2_base_addr[15:0]  <= 16'h0000;
                             z2_configured       <= 1'b1;
                         end else if (access_size == 2'd1 && access_addr[6:1] == 6'h24) begin
                             // 16-bit word write to $48 sets both Base High & Base Low
-                            z2_base_addr[23:20] <= access_wr_data[15:12] | access_wr_data[11:8];
-                            z2_base_addr[19:16] <= access_wr_data[7:4]   | access_wr_data[3:0];
+                            z2_base_addr[23:20] <= access_wr_data[15:12];
+                            z2_base_addr[19:16] <= access_wr_data[11:8];
                             z2_base_addr[15:0]  <= 16'h0000;
                             z2_configured       <= 1'b1;
                         end else if (access_addr[6:1] == 6'h24) begin
-                            // 8-bit byte write to $48 (Base High)
-                            z2_base_addr[23:20] <= access_wr_data[7:4] | access_wr_data[3:0];
+                            // Byte write to $48 (ec_BaseAddress)
+                            z2_base_addr[23:20] <= ac_byte_hi;
+                            base_hi_written     <= 1'b1;
+                            if (ac_byte_lo != 4'h0) begin
+                                // Full byte written to $48 (contains both nibbles, e.g. $E9 from Kickstart)
+                                z2_base_addr[19:16] <= ac_byte_lo;
+                                z2_base_addr[15:0]  <= 16'h0000;
+                                z2_configured       <= 1'b1;
+                            end else if (base_lo_written) begin
+                                // Low nibble was already latched by prior write to $4A
+                                z2_base_addr[15:0]  <= 16'h0000;
+                                z2_configured       <= 1'b1;
+                            end
                         end else if (access_addr[6:1] == 6'h25) begin
-                            // 8-bit byte write to $4A (Base Low - commits configuration)
-                            z2_base_addr[19:16] <= access_wr_data[7:4] | access_wr_data[3:0];
-                            z2_base_addr[15:0]  <= 16'h0000;
-                            z2_configured       <= 1'b1;
+                            // Byte write to $4A (ec_BaseAddress+2, Base Low)
+                            z2_base_addr[19:16] <= (ac_byte_hi != 4'h0) ? ac_byte_hi : ac_byte_lo;
+                            base_lo_written     <= 1'b1;
+                            if (base_hi_written) begin
+                                z2_base_addr[15:0]  <= 16'h0000;
+                                z2_configured       <= 1'b1;
+                            end
                         end else if (access_addr[6:1] == 6'h26) begin
                             // Write to $4C (Shut-up command)
                             z2_shutup <= 1'b1;
@@ -349,56 +383,71 @@ module zorro_device #(
 
     always @(posedge clk) begin
         if (reset) begin
-            s0_ack_reg    <= 1'b0;
-            s0_reg_data   <= 32'd0;
-            z2_scratchpad <= 32'd0;
-            int2_pending  <= 1'b0;
-            int6_pending  <= 1'b0;
-            int2_enable   <= 1'b0;
-            int6_enable   <= 1'b0;
+            s0_ack_reg       <= 1'b0;
+            s0_reg_data      <= 32'd0;
+            z2_scratchpad    <= 32'd0;
+            int2_pending     <= 1'b0;
+            int6_pending     <= 1'b0;
+            int2_enable      <= 1'b0;
+            int6_enable      <= 1'b0;
+            prefetch_ctrl_en <= 1'b1;
+            counter_clear    <= 1'b0;
         end else begin
-            s0_ack_reg <= 1'b0;
+            s0_ack_reg    <= 1'b0;
+            counter_clear <= 1'b0;
 
             if (wb_stb_s0 && !s0_ack_reg) begin
                 s0_ack_reg <= 1'b1;
 
                 // Read Multiplexer
-                case (wb_adr[5:2])
-                    4'h0: s0_reg_data <= 32'h50533332; // "PS32"
-                    4'h1: s0_reg_data <= {Z2_MANUF_ID, Z2_PROD_ID, 8'h01}; // 0x6D743201
-                    4'h2: s0_reg_data <= {8'h00, z2_base_addr[23:16], 15'd0, z2_configured};
-                    4'h3: s0_reg_data <= z2_scratchpad;
-                    4'h4: s0_reg_data <= {27'd0, s2_irq, s1_irq, 1'b0, int6_pending, int2_pending};
-                    4'h5: s0_reg_data <= {30'd0, int6_enable, int2_enable};
+                case (wb_adr[6:2])
+                    5'h00: s0_reg_data <= 32'h50533332; // "PS32"
+                    5'h01: s0_reg_data <= {Z2_MANUF_ID, Z2_PROD_ID, 8'h01}; // 0x6D743201
+                    5'h02: s0_reg_data <= {8'h00, z2_base_addr[23:16], 15'd0, z2_configured};
+                    5'h03: s0_reg_data <= z2_scratchpad;
+                    5'h04: s0_reg_data <= {27'd0, s2_irq, s1_irq, 1'b0, int6_pending, int2_pending};
+                    5'h05: s0_reg_data <= {30'd0, int6_enable, int2_enable};
+                    5'h06: s0_reg_data <= 32'd0;
+                    5'h07: s0_reg_data <= {31'd0, prefetch_ctrl_en}; // +$1C: PREFETCH_CTRL
+                    5'h08: s0_reg_data <= diag_status;               // +$20: DIAG_STATUS
+                    5'h09: s0_reg_data <= prefetch_launch_count;     // +$24: PREFETCH_LAUNCH_COUNT
+                    5'h0A: s0_reg_data <= prefetch_hit_count;        // +$28: PREFETCH_HIT_COUNT
+                    5'h0B: s0_reg_data <= diag_bus_capture;          // +$2C: DIAG_BUS_CAPTURE
                     default: s0_reg_data <= 32'd0;
                 endcase
 
                 // Write Handling
                 if (wb_we) begin
-                    case (wb_adr[5:2])
-                        4'h3: begin // Scratchpad write with byte lane enables
+                    case (wb_adr[6:2])
+                        5'h03: begin // Scratchpad write with byte lane enables
                             if (wb_sel[3]) z2_scratchpad[31:24] <= wb_dat_m2s[31:24];
                             if (wb_sel[2]) z2_scratchpad[23:16] <= wb_dat_m2s[23:16];
                             if (wb_sel[1]) z2_scratchpad[15:8]  <= wb_dat_m2s[15:8];
                             if (wb_sel[0]) z2_scratchpad[7:0]   <= wb_dat_m2s[7:0];
                         end
-                        4'h4: begin // INT_STATUS: Write-1-to-clear
+                        5'h04: begin // INT_STATUS: Write-1-to-clear
                             if (wb_sel[0]) begin
                                 if (wb_dat_m2s[0]) int2_pending <= 1'b0;
                                 if (wb_dat_m2s[1]) int6_pending <= 1'b0;
                             end
                         end
-                        4'h5: begin // INT_ENABLE: Read/Write
+                        5'h05: begin // INT_ENABLE: Read/Write
                             if (wb_sel[0]) begin
                                 int2_enable <= wb_dat_m2s[0];
                                 int6_enable <= wb_dat_m2s[1];
                             end
                         end
-                        4'h6: begin // INT_FORCE: Write-only trigger
+                        5'h06: begin // INT_FORCE: Write-only trigger
                             if (wb_sel[0]) begin
                                 if (wb_dat_m2s[0]) int2_pending <= 1'b1;
                                 if (wb_dat_m2s[1]) int6_pending <= 1'b1;
                             end
+                        end
+                        5'h07: begin // PREFETCH_CTRL: Read/Write (+$1C)
+                            if (wb_sel[0]) prefetch_ctrl_en <= wb_dat_m2s[0];
+                        end
+                        5'h09, 5'h0A: begin // Counter clear trigger on write to +$24 or +$28
+                            counter_clear <= 1'b1;
                         end
                     endcase
                 end
