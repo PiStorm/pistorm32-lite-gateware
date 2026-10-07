@@ -68,18 +68,27 @@ make bitstream
 The ready-to-use bitstream is pre-compiled and tracked in the repository as [`firmware.bin.gz`](firmware.bin.gz).
 
 ### With Emu68 (Bare-Metal JIT)
-1. Copy [`firmware.bin.gz`](firmware.bin.gz) directly onto the FAT32 boot partition of your Raspberry Pi SD card (place it in the root folder alongside `Emu68.img`).
-2. Power on or reset the Amiga. Emu68 automatically programs the Efinix Trion T20 FPGA over GPIO bitbang at boot time.
+The Emu68 kernel always has the latest stable firmware bitstream compiled directly into the kernel. If you want to load or test a custom bitstream from file:
+
+1. Copy [`firmware.bin.gz`](firmware.bin.gz) onto the FAT32 boot partition of your Raspberry Pi SD card (in the root directory).
+2. Open `config.txt` on the SD card, find the `initrd` line, and add `firmware.bin.gz`. For example, change:
+   ```ini
+   initrd kickstart.rom
+   ```
+   to:
+   ```ini
+   initrd firmware.bin.gz,kickstart.rom
+   ```
+3. Power on or reset the Amiga. Emu68 will automatically load and program the FPGA bitstream from this file at boot.
 
 ### With PiStorm Linux
-1. Copy [`firmware.bin.gz`](firmware.bin.gz) to your Raspberry Pi:
+Flashing under Linux is completely automatic at boot:
+
+1. Copy [`firmware.bin.gz`](firmware.bin.gz) into the PiStorm directory on your Raspberry Pi:
    ```bash
    sudo cp firmware.bin.gz /usr/share/pistorm/
    ```
-2. Or program it directly using the flasher script:
-   ```bash
-   sudo ./flash.sh firmware.bin.gz
-   ```
+2. The PiStorm system automatically programs the FPGA at boot. (Alternatively, you can flash immediately using `sudo ./flash.sh firmware.bin.gz`).
 
 <details>
 <summary><b>FPGA Programming GPIO Pinout (Hardware Details)</b></summary>
