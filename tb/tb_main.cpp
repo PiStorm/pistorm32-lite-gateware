@@ -2,6 +2,8 @@
 #include <iomanip>
 #include <memory>
 #include <string>
+#include <vector>
+#include <cmath>
 #include <cassert>
 #include <verilated.h>
 #include <verilated_vcd_c.h>
@@ -122,6 +124,7 @@ public:
     }
 
     double get_now_ns() const { return now_ns_; }
+    uint64_t get_pll_ticks() const { return pll_tick_count_; }
 
     Vpistorm* dut() { return dut_.get(); }
     AmigaBusModel* amiga() { return amiga_bus_.get(); }
@@ -162,14 +165,348 @@ static int g_tests_failed = 0;
         } \
     } while(0)
 
+struct BenchmarkStat {
+    std::string name;
+    std::string bus_type;
+    std::string config;
+    size_t count;
+    size_t bytes_per_op;
+    double elapsed_ns;
+    uint64_t bus_cycles;
+
+    double throughput_mb_s() const {
+        double bytes = (double)(count * bytes_per_op);
+        double sec = elapsed_ns * 1e-9;
+        return (bytes / (1024.0 * 1024.0)) / sec;
+    }
+
+    double mops() const {
+        double sec = elapsed_ns * 1e-9;
+        return ((double)count / 1e6) / sec;
+    }
+
+    double avg_latency_ns() const {
+        return elapsed_ns / (double)count;
+    }
+
+    double avg_amiga_clks() const {
+        return avg_latency_ns() / 70.48; // 14.1875 MHz MC_CLK
+    }
+};
+
+void run_benchmark_suite(SimulationHarness& harness) {
+    auto* dut = harness.dut();
+    auto* amiga = harness.amiga();
+    auto* pi = harness.pi();
+
+    std::cout << "\n" ANSI_BOLD ANSI_CYAN "================================================================================\n"
+              << "  === Test 15: Performance Benchmark Suite (Chipmem, Chipset & Virtual Zorro) ===\n"
+              << "================================================================================\n" ANSI_RESET;
+
+    // Ensure Pi host releases reset and halt lines (EMU68 boot sequence)
+    pi->ps_clr_control(CONTROL_DRIVE_RESET | CONTROL_DRIVE_HALT);
+    harness.run_mc_cycles(10);
+
+    // Ensure PiStorm is Bus Master and 2-slot mode is active
+    pi->set_use_2slot(true);
+    pi->ps_set_control(CONTROL_REQ_BM);
+    harness.run_mc_cycles(15);
+
+    // Ensure Virtual Zorro card is configured at 0x00E90000
+    if (!dut->pistorm__DOT__z2_configured) {
+        pi->ps32_write_8(0x00E80048, 0xE0);
+        pi->ps32_write_8(0x00E8004A, 0x90);
+        pi->flush_pending_writes();
+        harness.run_mc_cycles(4);
+    }
+
+    std::vector<BenchmarkStat> stats;
+
+    // -------------------------------------------------------------------------
+    // 15.1: Chipmem Benchmark ($00040000..$0004FFFF)
+    // 32-bit Amiga 1200 Motherboard Chip RAM, Alice/Budgie bus arbitration
+    // -------------------------------------------------------------------------
+    std::cout << ANSI_BOLD ANSI_BLUE "\n  [15.1] Benchmarking Amiga 1200 Motherboard Chip RAM ($00040000)...\n" ANSI_RESET;
+    uint32_t chipmem_base = 0x00040000;
+    amiga->set_port_width_region(chipmem_base, 0x10000, PortWidth::PORT_32BIT);
+    amiga->set_wait_states(1); // Realistic 1 WS for A1200 Alice arbitration (4 MC_CLK cycles per transfer)
+
+    // Pre-populate test pattern in memory
+    for (int i = 0; i < 64; ++i) {
+        amiga->mem_write_32(chipmem_base + i * 4, 0x11000000 | (uint32_t)i);
+    }
+
+    // 15.1a: Chipmem Sequential 32-bit Read (Prefetch Disabled)
+    pi->ps_clr_control(CONTROL_ENABLE_PREFETCH);
+    pi->flush_pending_writes();
+    harness.run_mc_cycles(4);
+
+    double t0 = harness.get_now_ns();
+    uint64_t b0 = amiga->get_total_bus_cycles();
+    uint32_t last_val = 0;
+    for (int i = 0; i < 64; ++i) {
+        last_val = pi->ps32_read_32(chipmem_base + i * 4);
+    }
+    double t1 = harness.get_now_ns();
+    uint64_t b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT(last_val == (0x11000000 | 63), "Chipmem Read (No Prefetch): Read data matches memory");
+    TEST_ASSERT((b1 - b0) == 64, "Chipmem Read (No Prefetch): Generated exactly 64 motherboard bus cycles");
+    stats.push_back({"Chipmem 32-bit Read (No Prefetch)", "32-bit Motherboard", "1 WS (4 clks)", 64, 4, t1 - t0, b1 - b0});
+
+    // 15.1b: Chipmem Sequential 32-bit Read (Prefetch Enabled)
+    pi->ps_set_control(CONTROL_ENABLE_PREFETCH);
+    harness.run_mc_cycles(4);
+    // Prime prefetch
+    pi->ps32_read_32(chipmem_base);
+    harness.run_mc_cycles(4);
+
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    for (int i = 0; i < 64; ++i) {
+        last_val = pi->ps32_read_32(chipmem_base + i * 4);
+    }
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT(last_val == (0x11000000 | 63), "Chipmem Read (Prefetch ON): Read data matches memory");
+    stats.push_back({"Chipmem 32-bit Read (Prefetch ON)", "32-bit Motherboard", "Speculative Hit", 64, 4, t1 - t0, b1 - b0});
+    pi->ps_clr_control(CONTROL_ENABLE_PREFETCH); // restore
+
+    // 15.1c: Chipmem Sequential 32-bit Write (Pipelined 2-Slot Queue)
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    for (int i = 0; i < 64; ++i) {
+        pi->ps32_write_32(chipmem_base + i * 4, 0xCAFE0000 | (uint32_t)i);
+    }
+    pi->flush_pending_writes();
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT(amiga->mem_read_32(chipmem_base + 63 * 4) == (0xCAFE0000 | 63), "Chipmem Write: Memory verification in RAM");
+    TEST_ASSERT((b1 - b0) == 64, "Chipmem Write: Generated exactly 64 motherboard bus cycles");
+    stats.push_back({"Chipmem 32-bit Write (Pipelined)", "32-bit Motherboard", "1 WS (2-Slot)", 64, 4, t1 - t0, b1 - b0});
+
+    // 15.1d: Chipmem Sequential 16-bit Word Read
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    uint16_t last_val16 = 0;
+    for (int i = 0; i < 64; ++i) {
+        last_val16 = pi->ps32_read_16(chipmem_base + i * 2);
+    }
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT(last_val16 != 0, "Chipmem 16-bit Word Read: Non-zero data received");
+    stats.push_back({"Chipmem 16-bit Word Read", "32-bit Motherboard", "1 WS (4 clks)", 64, 2, t1 - t0, b1 - b0});
+
+    // 15.1e: Chipmem Sequential 16-bit Word Write
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    for (int i = 0; i < 64; ++i) {
+        pi->ps32_write_16(chipmem_base + i * 2, 0xBEEF ^ (uint16_t)i);
+    }
+    pi->flush_pending_writes();
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT(amiga->mem_read_16(chipmem_base + 63 * 2) == (0xBEEF ^ 63), "Chipmem 16-bit Word Write: Verified in RAM");
+    stats.push_back({"Chipmem 16-bit Word Write", "32-bit Motherboard", "1 WS (2-Slot)", 64, 2, t1 - t0, b1 - b0});
+
+    // -------------------------------------------------------------------------
+    // 15.2: Custom Chipset Benchmark ($00DFF000..$00DFFFFF)
+    // 16-bit Port Width, 7 MHz CCK synchronization delay (2 wait states)
+    // -------------------------------------------------------------------------
+    std::cout << ANSI_BOLD ANSI_BLUE "\n  [15.2] Benchmarking Amiga Custom Chipset ($00DFF000)...\n" ANSI_RESET;
+    uint32_t chipset_base = 0x00DFF000;
+    amiga->set_port_width_region(chipset_base, 0x1000, PortWidth::PORT_16BIT);
+    amiga->set_wait_states(2); // 2 wait states for 7 MHz CCK color clock sync
+
+    for (int i = 0; i < 64; ++i) {
+        amiga->mem_write_16(chipset_base + i * 2, 0x0A00 | (uint16_t)i);
+    }
+
+    // 15.2a: Custom Chipset 16-bit Word Read
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    for (int i = 0; i < 64; ++i) {
+        last_val16 = pi->ps32_read_16(chipset_base + (i % 16) * 2);
+    }
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT((b1 - b0) == 64, "Chipset Read: 64 word reads generated 64 bus cycles");
+    stats.push_back({"Chipset 16-bit Word Read", "16-bit Custom Chips", "2 WS (CCK sync)", 64, 2, t1 - t0, b1 - b0});
+
+    // 15.2b: Custom Chipset 16-bit Word Write (e.g. Copper list / Color palette poke)
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    for (int i = 0; i < 64; ++i) {
+        pi->ps32_write_16(chipset_base + 0x180 + (i % 32) * 2, 0x0F00 | (uint16_t)i);
+    }
+    pi->flush_pending_writes();
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT((b1 - b0) == 64, "Chipset Write: 64 word writes generated 64 bus cycles");
+    TEST_ASSERT(amiga->mem_read_16(chipset_base + 0x180 + (31 * 2)) == (0x0F00 | 63), "Chipset Write: Verified in custom register space");
+    stats.push_back({"Chipset 16-bit Word Write", "16-bit Custom Chips", "2 WS (Sync Poke)", 64, 2, t1 - t0, b1 - b0});
+
+    // 15.2c: Custom Chipset 32-bit Longword Write (Dynamic Bus Sizing)
+    // 32 longwords on a 16-bit port decompose into 64 physical bus cycles
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    for (int i = 0; i < 32; ++i) {
+        pi->ps32_write_32(chipset_base + 0x80 + (i % 8) * 4, 0x12345670 | (uint32_t)i);
+    }
+    pi->flush_pending_writes();
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT((b1 - b0) == 64, "Chipset Dynamic Sizing: 32 longword transfers generated 64 16-bit bus cycles");
+    stats.push_back({"Chipset 32-bit Dyn Sizing", "16-bit Custom Chips", "2 WS (2x cycles)", 32, 4, t1 - t0, b1 - b0});
+
+    // -------------------------------------------------------------------------
+    // 15.3: Virtual Zorro-II Benchmark ($00E90000..$00E902FF)
+    // 182 MHz Internal Wishbone B4 Interconnect (Zero Motherboard Bus Impact)
+    // -------------------------------------------------------------------------
+    std::cout << ANSI_BOLD ANSI_BLUE "\n  [15.3] Benchmarking Virtual Zorro-II Wishbone Interconnect ($00E90000)...\n" ANSI_RESET;
+    uint32_t zorro_base = 0x00E90000;
+    amiga->set_wait_states(0);
+
+
+    // 15.3a: Virtual Zorro 32-bit Scratchpad Write (Slave 0: $00E9000C)
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    for (int i = 0; i < 128; ++i) {
+        pi->ps32_write_32(zorro_base + 0x0C, 0xA5A50000 | (uint32_t)i);
+    }
+    pi->flush_pending_writes();
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT((b1 - b0) == 0, "Virtual Zorro Write: Zero motherboard bus cycles (100% FPGA internal)");
+    stats.push_back({"Virtual Zorro 32-bit Scratchpad Wr", "182 MHz Wishbone", "0 WS (Internal)", 128, 4, t1 - t0, b1 - b0});
+
+    // 15.3b: Virtual Zorro 32-bit Scratchpad Read (Slave 0: $00E9000C)
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    for (int i = 0; i < 128; ++i) {
+        last_val = pi->ps32_read_32(zorro_base + 0x0C);
+    }
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT((b1 - b0) == 0, "Virtual Zorro Read: Zero motherboard bus cycles (100% FPGA internal)");
+    TEST_ASSERT(last_val == (0xA5A50000 | 127), "Virtual Zorro Read: Data matches last written value");
+    stats.push_back({"Virtual Zorro 32-bit Scratchpad Rd", "182 MHz Wishbone", "0 WS (Internal)", 128, 4, t1 - t0, b1 - b0});
+
+    // 15.3c: Virtual Zorro SPI / Coprocessor Register (Slave 1: $00E90104)
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    for (int i = 0; i < 128; ++i) {
+        pi->ps32_write_32(zorro_base + 0x104, 0x55AA0000 | (uint32_t)i);
+    }
+    pi->flush_pending_writes();
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT((b1 - b0) == 0, "Virtual Zorro Slave 1: Zero motherboard bus cycles");
+    stats.push_back({"Virtual Zorro SPI/Coproc Reg 32-bit", "182 MHz Wishbone", "0 WS (Internal)", 128, 4, t1 - t0, b1 - b0});
+
+    // 15.3d: Virtual Zorro Slave 2 GPIO Matrix Atomic Toggling ($00E9020C / $00E90210)
+    // 128 sets + 128 clears = 256 atomic W1TS/W1TC operations
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    for (int i = 0; i < 128; ++i) {
+        pi->ps32_write_32(zorro_base + 0x20C, 0x00000055); // Atomic Set
+        pi->ps32_write_32(zorro_base + 0x210, 0x00000055); // Atomic Clear
+    }
+    pi->flush_pending_writes();
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT((b1 - b0) == 0, "Virtual Zorro Slave 2: Zero motherboard bus cycles");
+    stats.push_back({"Virtual Zorro GPIO Atomic Toggle", "182 MHz Wishbone", "0 WS (Atomic)", 256, 4, t1 - t0, b1 - b0});
+
+    // -------------------------------------------------------------------------
+    // 15.4: Comparative Analysis & Speedup Verification
+    // -------------------------------------------------------------------------
+    const auto& chipmem_rd_nopref = stats[0];
+    const auto& chipmem_rd_pref   = stats[1];
+    const auto& chipset_wr        = stats[6];
+    const auto& zorro_wr          = stats[8];
+    const auto& zorro_rd          = stats[9];
+
+    double speedup_zorro_vs_chipset_wr = zorro_wr.throughput_mb_s() / chipset_wr.throughput_mb_s();
+    double speedup_zorro_vs_chipmem_rd = zorro_rd.throughput_mb_s() / chipmem_rd_nopref.throughput_mb_s();
+    double speedup_prefetch = chipmem_rd_pref.throughput_mb_s() / chipmem_rd_nopref.throughput_mb_s();
+
+    TEST_ASSERT(zorro_wr.throughput_mb_s() > chipset_wr.throughput_mb_s(),
+                "Performance: Virtual Zorro Write throughput exceeds Custom Chipset throughput");
+    TEST_ASSERT(zorro_rd.throughput_mb_s() > chipmem_rd_nopref.throughput_mb_s(),
+                "Performance: Virtual Zorro Read throughput exceeds Motherboard Chip RAM throughput");
+    TEST_ASSERT(chipmem_rd_pref.throughput_mb_s() > chipmem_rd_nopref.throughput_mb_s(),
+                "Performance: Speculative Prefetch accelerates sequential Chip RAM reads");
+
+    // -------------------------------------------------------------------------
+    // Performance Summary Table
+    // -------------------------------------------------------------------------
+    std::cout << "\n" ANSI_BOLD ANSI_YELLOW
+              << "====================================================================================================================================\n"
+              << "                        PiStorm32-Lite Memory & Bus Architecture Benchmark Report\n"
+              << "====================================================================================================================================\n" ANSI_RESET
+              << std::left
+              << std::setw(37) << "Benchmark Target"
+              << std::setw(23) << "Interconnect / Bus"
+              << std::setw(22) << "Configuration"
+              << std::right
+              << std::setw(14) << "Throughput"
+              << std::setw(16) << "Operations Rate"
+              << std::setw(14) << "Avg Latency"
+              << std::setw(18) << "Motherboard Bus"
+              << "\n"
+              << "------------------------------------------------------------------------------------------------------------------------------------\n";
+
+    for (const auto& s : stats) {
+        std::cout << ANSI_BOLD << std::left
+                  << std::setw(37) << s.name
+                  << ANSI_RESET
+                  << std::left
+                  << std::setw(23) << s.bus_type
+                  << std::setw(22) << s.config
+                  << std::right << std::fixed << std::setprecision(1)
+                  << ANSI_GREEN << std::setw(9) << s.throughput_mb_s() << " MB/s" ANSI_RESET
+                  << std::setprecision(2)
+                  << ANSI_CYAN << std::setw(9) << s.mops() << " MOps/s" ANSI_RESET
+                  << std::setprecision(1)
+                  << std::setw(11) << s.avg_latency_ns() << " ns"
+                  << std::right;
+        if (s.bus_cycles == 0) {
+            std::cout << ANSI_GREEN << std::setw(18) << "0 clk [ISOLATED]" ANSI_RESET << "\n";
+        } else {
+            std::cout << std::setw(11) << s.bus_cycles << " cycles" << "\n";
+        }
+    }
+
+    std::cout << "------------------------------------------------------------------------------------------------------------------------------------\n"
+              << ANSI_BOLD "Architectural Performance Insights:\n" ANSI_RESET
+              << "  * " ANSI_GREEN "Virtual Zorro Write vs Custom Chipset Write" ANSI_RESET
+              << ":  " ANSI_BOLD << std::fixed << std::setprecision(1) << speedup_zorro_vs_chipset_wr << "x Faster" ANSI_RESET
+              << " (Bypasses slow 7MHz CCK sync & motherboard wait states)\n"
+              << "  * " ANSI_GREEN "Virtual Zorro Read  vs Motherboard Chip RAM" ANSI_RESET
+              << ":  " ANSI_BOLD << speedup_zorro_vs_chipmem_rd << "x Faster" ANSI_RESET
+              << " (Direct 182 MHz Wishbone response, no Alice arbitration)\n"
+              << "  * " ANSI_GREEN "Speculative Prefetch Acceleration" ANSI_RESET
+              << ":            " ANSI_BOLD << "+" << std::setprecision(1) << ((speedup_prefetch - 1.0) * 100.0) << "% Gain" ANSI_RESET
+              << " (Speculative read-ahead eliminates bus wait states)\n"
+              << "  * " ANSI_GREEN "Bus Isolation" ANSI_RESET
+              << ":                             " ANSI_BOLD "100% Isolated" ANSI_RESET
+              << " (0 Amiga motherboard bus cycles during all Virtual Zorro Wishbone transfers)\n"
+              << ANSI_BOLD ANSI_YELLOW
+              << "====================================================================================================================================\n" ANSI_RESET
+              << std::endl;
+}
+
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
 
     bool enable_trace = false;
+    bool benchmark_only = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--trace" || arg == "-t") {
             enable_trace = true;
+        } else if (arg == "--benchmark-only" || arg == "--bench" || arg == "-b") {
+            benchmark_only = true;
         }
     }
 
@@ -186,6 +523,28 @@ int main(int argc, char** argv) {
 
     // Warm-up clocks
     harness.run_mc_cycles(20);
+
+    if (benchmark_only) {
+        std::cout << ANSI_BOLD ANSI_CYAN "========================================================\n"
+                  << "  PiStorm32-lite Benchmark Suite (Standalone Mode)\n"
+                  << "========================================================\n" ANSI_RESET << std::endl;
+        // Pulse system reset so CPLD starts in known clean state
+        amiga->set_external_reset(true);
+        harness.run_mc_cycles(10);
+        amiga->set_external_reset(false);
+        harness.run_mc_cycles(10);
+
+        run_benchmark_suite(harness);
+
+        std::cout << "\n" ANSI_BOLD ANSI_CYAN "========================================================\n"
+                  << "  Benchmark Assertions Summary\n"
+                  << "========================================================\n" ANSI_RESET;
+        std::cout << "  Total Assertions: " << (g_tests_passed + g_tests_failed) << std::endl;
+        std::cout << "  Passed:           " ANSI_GREEN << g_tests_passed << ANSI_RESET << std::endl;
+        std::cout << "  Failed:           " << (g_tests_failed > 0 ? ANSI_RED : ANSI_GREEN)
+                  << g_tests_failed << ANSI_RESET << std::endl;
+        return (g_tests_failed == 0) ? 0 : 1;
+    }
 
     // =========================================================================
     // Test 1: Clock synchronization and Reset state
@@ -1295,6 +1654,11 @@ int main(int argc, char** argv) {
         uint32_t unmapped_val = pi->ps32_read_32(0x00E90300);
         TEST_ASSERT(unmapped_val == 0, "Wishbone Default Slave: Unmapped address $00E90300 terminates safely returning 0");
     }
+
+    // =========================================================================
+    // Test 15: Memory & Bus Performance Benchmark Suite
+    // =========================================================================
+    run_benchmark_suite(harness);
 
     // =========================================================================
     // Summary
