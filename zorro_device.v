@@ -62,6 +62,7 @@ module zorro_device #(
     output reg         fast_dsack_en = 1'b0,
     output reg         cck_sync_en = 1'b0,
     output reg         force_phase_invert = 1'b0,
+    output reg         enable_word_prefetch = 1'b0,
     output reg         counter_clear = 1'b0
 );
 
@@ -398,11 +399,12 @@ module zorro_device #(
             int6_pending     <= 1'b0;
             int2_enable      <= 1'b0;
             int6_enable      <= 1'b0;
-            prefetch_ctrl_en   <= 1'b1;
-            fast_dsack_en      <= 1'b0;
-            cck_sync_en        <= 1'b0;
-            force_phase_invert <= 1'b0;
-            counter_clear      <= 1'b0;
+            prefetch_ctrl_en     <= 1'b1;
+            fast_dsack_en        <= 1'b0;
+            cck_sync_en          <= 1'b0;
+            force_phase_invert   <= 1'b0;
+            enable_word_prefetch <= 1'b0;
+            counter_clear        <= 1'b0;
         end else begin
             s0_ack_reg    <= 1'b0;
             counter_clear <= 1'b0;
@@ -419,7 +421,7 @@ module zorro_device #(
                     5'h04: s0_reg_data <= {27'd0, s2_irq, s1_irq, 1'b0, int6_pending, int2_pending};
                     5'h05: s0_reg_data <= {30'd0, int6_enable, int2_enable};
                     5'h06: s0_reg_data <= 32'd0;
-                    5'h07: s0_reg_data <= {25'd0, current_cck_phase, fast_read_phase_cal, phase_calibrated, force_phase_invert, cck_sync_en, fast_dsack_en, prefetch_ctrl_en}; // +$1C: BUS_CTRL
+                    5'h07: s0_reg_data <= {24'd0, enable_word_prefetch, current_cck_phase, fast_read_phase_cal, phase_calibrated, force_phase_invert, cck_sync_en, fast_dsack_en, prefetch_ctrl_en}; // +$1C: BUS_CTRL
                     5'h08: s0_reg_data <= diag_status;               // +$20: DIAG_STATUS
                     5'h09: s0_reg_data <= prefetch_launch_count;     // +$24: PREFETCH_LAUNCH_COUNT
                     5'h0A: s0_reg_data <= prefetch_hit_count;        // +$28: PREFETCH_HIT_COUNT
@@ -458,10 +460,11 @@ module zorro_device #(
                         end
                         5'h07: begin // PREFETCH_CTRL / BUS_CTRL: Read/Write (+$1C)
                             if (wb_sel[0]) begin
-                                prefetch_ctrl_en   <= wb_dat_m2s[0];
-                                fast_dsack_en      <= wb_dat_m2s[1];
-                                cck_sync_en        <= wb_dat_m2s[2];
-                                force_phase_invert <= wb_dat_m2s[3];
+                                prefetch_ctrl_en     <= wb_dat_m2s[0];
+                                fast_dsack_en        <= wb_dat_m2s[1];
+                                cck_sync_en          <= wb_dat_m2s[2];
+                                force_phase_invert   <= wb_dat_m2s[3];
+                                enable_word_prefetch <= wb_dat_m2s[7];
                             end
                         end
                         5'h09, 5'h0A: begin // Counter clear trigger on write to +$24 or +$28

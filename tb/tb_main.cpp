@@ -688,6 +688,28 @@ void run_benchmark_suite(SimulationHarness& harness) {
     TEST_ASSERT(last_val16 != 0, "Chipmem 16-bit Word Read: Non-zero data received");
     stats.push_back({"Chipmem 16-bit Word Read", "32-bit Motherboard", "560ns Alice Slot", 64, 2, t1 - t0, b1 - b0});
 
+    // 15.1d2: Chipmem Sequential 16-bit Word Read (16-bit Prefetch Enabled)
+    pi->ps_set_control(CONTROL_ENABLE_PREFETCH);
+    pi->ps32_write_32(0x00E9001C, 0x00000081); // Prefetch enable (bit 0) + enable_word_prefetch (bit 7)
+    pi->flush_pending_writes();
+    harness.run_mc_cycles(4);
+    // Prime prefetch
+    pi->ps32_read_16(chipmem_base);
+    harness.run_mc_cycles(4);
+
+    t0 = harness.get_now_ns();
+    b0 = amiga->get_total_bus_cycles();
+    for (int i = 0; i < 64; ++i) {
+        last_val16 = pi->ps32_read_16(chipmem_base + i * 2);
+    }
+    t1 = harness.get_now_ns();
+    b1 = amiga->get_total_bus_cycles();
+    TEST_ASSERT(last_val16 != 0, "Chipmem 16-bit Word Read (Prefetch ON): Non-zero data received");
+    TEST_ASSERT((b1 - b0) < 64, "Chipmem 16-bit Word Read (Prefetch ON): Halves bus cycles via 16-bit prefetch hits");
+    stats.push_back({"Chipmem 16-bit Read (Prefetch ON)", "32-bit Motherboard", "Speculative Hit", 64, 2, t1 - t0, b1 - b0});
+    pi->ps32_write_32(0x00E9001C, 0x00000001); // restore default
+    pi->ps_clr_control(CONTROL_ENABLE_PREFETCH);
+
     // 15.1e: Chipmem Sequential 16-bit Word Write
     t0 = harness.get_now_ns();
     b0 = amiga->get_total_bus_cycles();

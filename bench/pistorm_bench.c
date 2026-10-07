@@ -557,8 +557,8 @@ int main(int argc, char **argv) {
         }
         ULONG val = strtoul(argv[2], NULL, 0);
         zorro_dev[ZREG_PREF_CTRL / 4] = val;
-        printf("[CONTROL] BUS_CTRL set to 0x%08lX (Prefetch=%d, FastDSACK=%d, CCKSync=%d, PhaseInv=%d)\n",
-               val, (int)(val & 1), (int)((val >> 1) & 1), (int)((val >> 2) & 1), (int)((val >> 3) & 1));
+        printf("[CONTROL] BUS_CTRL set to 0x%08lX (Prefetch=%d, FastDSACK=%d, CCKSync=%d, PhaseInv=%d, EnWordPref=%d)\n",
+               val, (int)(val & 1), (int)((val >> 1) & 1), (int)((val >> 2) & 1), (int)((val >> 3) & 1), (int)((val >> 7) & 1));
         cleanup_timer();
         return 0;
     }

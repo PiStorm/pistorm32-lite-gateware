@@ -5,6 +5,11 @@
  * Copyright 2022-2026 Claude Schwarz
  */
 
+// =============================================================================
+// Feature Compilation Flags
+// =============================================================================
+`define ENABLE_16BIT_PREFETCH
+
 module m68k_interface (
     input  wire        clk,
 
@@ -138,6 +143,7 @@ module m68k_interface (
     input  wire        fast_dsack_en,
     input  wire        cck_sync_en,
     input  wire        force_phase_invert,
+    input  wire        enable_word_prefetch,
     input  wire        counter_clear
 );
 
@@ -272,6 +278,10 @@ module m68k_interface (
     reg [23:0]  prefetch_addr = 24'd0;        // Address stored in prefetch buffer
     reg [31:0]  prefetch_data = 32'd0;        // Data read during prefetch cycle
     reg         prefetch_valid = 1'b0;       // Buffer holds valid data
+`ifdef ENABLE_16BIT_PREFETCH
+    reg         prefetch_word0_avail = 1'b0; // Word 0 ($00) available in prefetch buffer
+    reg         prefetch_word1_avail = 1'b0; // Word 1 ($02) available in prefetch buffer
+`endif
     reg         prefetch_eligible = 1'b0;    // Last cycle qualifies for speculative read-ahead
     reg         is_prefetch_cycle = 1'b0;    // Current bus cycle is speculative
     reg [23:0]  next_prefetch_addr = 24'd0;   // Base address + 4 for next prefetch
@@ -426,13 +436,29 @@ module m68k_interface (
 
     assign slot_complete_valid     = normal_cycle_terminate || internal_finish_terminate || prefetch_hit_terminate;
     assign slot_complete_id        = current_execute_slot_complete;
+`ifdef ENABLE_16BIT_PREFETCH
+    wire cur_req_word1_complete    = current_execute_slot_complete ? req_address_1[1] : req_address_0[1];
+    wire [1:0] cur_req_sz_complete = current_execute_slot_complete ? req_size_1 : req_size_0;
+    wire [31:0] prefetch_return_data =
+        (cur_req_sz_complete == 2'd1) ?
+            (cur_req_word1_complete ? {16'd0, prefetch_data[15:0]} : {16'd0, prefetch_data[31:16]}) :
+            prefetch_data;
+
+    assign slot_complete_data      = state[STATE_BIT_INTERNAL_FINISH] ? z2_rd_data :
+                                     prefetch_hit_terminate           ? prefetch_return_data :
+                                     data_read;
+`else
     assign slot_complete_data      = state[STATE_BIT_INTERNAL_FINISH] ? z2_rd_data :
                                      prefetch_hit_terminate           ? prefetch_data :
                                      data_read;
+`endif
     assign slot_complete_normally  = normal_cycle_terminate ? terminated_normally : 1'b1;
 
     // Effective prefetch enable controlled by both Pi register and Zorro register override
     wire enable_prefetch_eff = enable_prefetch && prefetch_ctrl_en;
+`ifdef ENABLE_16BIT_PREFETCH
+    wire enable_16bit_prefetch_eff = enable_prefetch_eff && enable_word_prefetch;
+`endif
 
     // Prefetch telemetry counters
     reg [31:0] r_prefetch_launch_count = 32'd0;
@@ -630,6 +656,30 @@ module m68k_interface (
     // Prefetch Safety Filter:
     // Only prefetch from Chip-RAM ($000000..$1FFFFF) or Expansion RAM ($E00000..$FFFFFF).
     // NEVER speculatively prefetch from CIA ($BFExxx) or Custom Registers ($DFFxxx)!
+`ifdef ENABLE_16BIT_PREFETCH
+    wire is_eligible_size = (latched_size == 2'd3) ||
+                            (enable_16bit_prefetch_eff && (latched_size == 2'd1) && (address[1] == 1'b0));
+    wire prefetch_eligible_term = terminated_normally && rw && is_eligible_size &&
+                                 (address[0] == 1'b0) && (latched_port_width == 2'd3) &&
+                                 ((address[23:21] == 3'b000) || (&address[23:19]));
+
+    // Prefetch hit detection qualification signals
+    wire req_prefetch_qual = enable_prefetch_eff && prefetch_valid && new_req_rw &&
+                             (new_req_addr[23:16] == prefetch_addr[23:16]) &&
+                             ((new_req_size == 2'd3) || (enable_16bit_prefetch_eff && (new_req_size == 2'd1)));
+
+    wire slot0_word0_match = (req_address_0[15:1] == prefetch_addr[15:1]) && prefetch_word0_avail;
+    wire slot0_word1_match = (req_address_0[15:2] == prefetch_addr[15:2]) && (req_address_0[1] == 1'b1) && prefetch_word1_avail;
+    wire slot0_long_match  = (req_address_0[15:0] == prefetch_addr[15:0]) && prefetch_word0_avail && prefetch_word1_avail;
+    wire slot0_addr_match  = (new_req_size == 2'd3) ? slot0_long_match :
+                             (req_address_0[1] ? slot0_word1_match : slot0_word0_match);
+
+    wire slot1_word0_match = (req_address_1[15:1] == prefetch_addr[15:1]) && prefetch_word0_avail;
+    wire slot1_word1_match = (req_address_1[15:2] == prefetch_addr[15:2]) && (req_address_1[1] == 1'b1) && prefetch_word1_avail;
+    wire slot1_long_match  = (req_address_1[15:0] == prefetch_addr[15:0]) && prefetch_word0_avail && prefetch_word1_avail;
+    wire slot1_addr_match  = (new_req_size == 2'd3) ? slot1_long_match :
+                             (req_address_1[1] ? slot1_word1_match : slot1_word0_match);
+`else
     wire prefetch_eligible_term = terminated_normally && rw && (latched_size == 2'd3) &&
                                  (address[1:0] == 2'b00) && (latched_port_width == 2'd3) &&
                                  ((address[23:21] == 3'b000) || (&address[23:19]));
@@ -640,6 +690,7 @@ module m68k_interface (
                              (new_req_addr[23:16] == prefetch_addr[23:16]);
     wire slot0_addr_match  = (req_address_0[15:0] == prefetch_addr[15:0]);
     wire slot1_addr_match  = (req_address_1[15:0] == prefetch_addr[15:0]);
+`endif
 
     // Prefetch Trigger Qualification Signal:
     // Speculative read is launched when enabled, FPGA owns the bus (is_bm),
@@ -706,6 +757,50 @@ module m68k_interface (
                             current_execute_slot_complete <= current_execute_slot_complete + 1'd1;
                             current_execute_slot_ctrl     <= current_execute_slot_ctrl + 1'd1;
                         end
+`ifdef ENABLE_16BIT_PREFETCH
+                        if (enable_16bit_prefetch_eff && cur_req_size == 2'd1 && cur_req_addr[1] == 1'b0) begin
+                            // Consumed Word 0 ($00). Word 1 ($02) remains available in buffer!
+                            prefetch_word0_avail <= 1'b0;
+                            prefetch_valid       <= prefetch_word1_avail;
+
+                            // Check if the other slot is already waiting for Word 1
+                            if (!current_execute_slot_ctrl) begin
+                                if (req_active[1] && req_rw_1 && (req_size_1 == 2'd1) &&
+                                    (req_address_1[23:2] == prefetch_addr[23:2]) && req_address_1[1])
+                                    req_prefetch_hit[1] <= 1'b1;
+                            end else begin
+                                if (req_active[0] && req_rw_0 && (req_size_0 == 2'd1) &&
+                                    (req_address_0[23:2] == prefetch_addr[23:2]) && req_address_0[1])
+                                    req_prefetch_hit[0] <= 1'b1;
+                            end
+
+                            // Do NOT launch chained prefetch yet because Word 1 is still in the buffer
+                            is_prefetch_cycle <= 1'b0;
+                            prefetch_eligible <= 1'b0;
+                            state             <= STATE_WAIT_ACTIVE_REQUEST;
+                        end else begin
+                            // Consumed Word 1 ($02) or Longword: buffer is now exhausted
+                            prefetch_word0_avail <= 1'b0;
+                            prefetch_word1_avail <= 1'b0;
+                            prefetch_valid       <= 1'b0;
+
+                            // Chained prefetch: if next address is still in safe RAM,
+                            // immediately kick off the subsequent speculative read
+                            if (chained_prefetch_allowed && is_bm) begin
+                                address                 <= chained_prefetch_addr;
+                                fc                      <= 3'd1; // User Data space
+                                size                    <= 2'd3; // 32-bit longword
+                                rw                      <= 1'b1; // Read
+                                is_prefetch_cycle       <= 1'b1;
+                                r_prefetch_launch_count <= r_prefetch_launch_count + 32'd1;
+                                state                   <= STATE_WAIT_BUS_CYCLE_START;
+                            end else begin
+                                is_prefetch_cycle <= 1'b0;
+                                prefetch_eligible <= 1'b0;
+                                state             <= STATE_WAIT_ACTIVE_REQUEST;
+                            end
+                        end
+`else
                         prefetch_valid <= 1'b0;
 
                         // Chained prefetch: if next address is still in safe RAM,
@@ -723,6 +818,7 @@ module m68k_interface (
                             prefetch_eligible <= 1'b0;
                             state             <= STATE_WAIT_ACTIVE_REQUEST;
                         end
+`endif
 
                     end else begin
                         // -----------------------------------------------------
@@ -730,6 +826,10 @@ module m68k_interface (
                         // Invalidate prefetch buffer and dispatch physical cycle.
                         // -----------------------------------------------------
                         prefetch_valid           <= 1'b0;
+`ifdef ENABLE_16BIT_PREFETCH
+                        prefetch_word0_avail     <= 1'b0;
+                        prefetch_word1_avail     <= 1'b0;
+`endif
                         prefetch_eligible        <= 1'b0;
                         next_prefetch_allowed    <= 1'b0;
                         chained_prefetch_allowed <= 1'b0;
@@ -1026,13 +1126,28 @@ module m68k_interface (
                             prefetch_addr            <= address;
                             prefetch_valid           <= 1'b1;
                             chained_prefetch_allowed <= ((address[23:21] == 3'b000) || (&address[23:19]));
+`ifdef ENABLE_16BIT_PREFETCH
+                            prefetch_word0_avail     <= 1'b1;
+                            prefetch_word1_avail     <= 1'b1;
+                            req_prefetch_hit[0]      <= enable_prefetch_eff && req_active[0] && req_rw_0 &&
+                                                        ((req_size_0 == 2'd3 && req_address_0 == address) ||
+                                                         (enable_16bit_prefetch_eff && req_size_0 == 2'd1 && req_address_0[23:2] == address[23:2]));
+                            req_prefetch_hit[1]      <= enable_prefetch_eff && req_active[1] && req_rw_1 &&
+                                                        ((req_size_1 == 2'd3 && req_address_1 == address) ||
+                                                         (enable_16bit_prefetch_eff && req_size_1 == 2'd1 && req_address_1[23:2] == address[23:2]));
+`else
                             req_prefetch_hit[0]      <= enable_prefetch_eff && req_active[0] && req_rw_0 &&
                                                        (req_address_0 == address) && (req_size_0 == 2'd3);
                             req_prefetch_hit[1]      <= enable_prefetch_eff && req_active[1] && req_rw_1 &&
                                                        (req_address_1 == address) && (req_size_1 == 2'd3);
+`endif
                         end else begin
-                            prefetch_valid   <= 1'b0;
-                            req_prefetch_hit <= 2'b00;
+                            prefetch_valid       <= 1'b0;
+`ifdef ENABLE_16BIT_PREFETCH
+                            prefetch_word0_avail <= 1'b0;
+                            prefetch_word1_avail <= 1'b0;
+`endif
+                            req_prefetch_hit     <= 2'b00;
                         end
                         is_prefetch_cycle <= 1'b0;
                         prefetch_eligible <= 1'b0;
@@ -1057,11 +1172,51 @@ module m68k_interface (
                         end
 
                         if (prefetch_eligible_term) begin
+`ifdef ENABLE_16BIT_PREFETCH
+                            if (enable_16bit_prefetch_eff && (latched_size == 2'd1) && (address[1] == 1'b0)) begin
+                                // 16-bit word read of Word 0 completed on 32-bit port (Chip RAM).
+                                // Alice drove both Word 0 and Word 1 onto DA[31:0].
+                                // mc_data_read holds {Word 0, Word 1}.
+                                prefetch_data            <= mc_data_read;
+                                prefetch_addr            <= address;
+                                prefetch_valid           <= 1'b1;
+                                prefetch_word0_avail     <= 1'b0; // Word 0 was just read
+                                prefetch_word1_avail     <= 1'b1; // Word 1 is available!
+                                chained_prefetch_addr    <= address + 24'd4;
+                                chained_prefetch_allowed <= ((address[23:21] == 3'b000) || (&address[23:19]));
+                                prefetch_eligible        <= 1'b0; // Buffer holds Word 1, do not launch speculative prefetch yet
+                                next_prefetch_allowed    <= 1'b0;
+
+                                // Check if other slot is already queued for Word 1 ($address + 2)
+                                if (!current_execute_slot_ctrl) begin
+                                    req_prefetch_hit[1] <= req_active[1] && req_rw_1 && (req_size_1 == 2'd1) &&
+                                                           (req_address_1[23:2] == address[23:2]) && req_address_1[1];
+                                    req_prefetch_hit[0] <= 1'b0;
+                                end else begin
+                                    req_prefetch_hit[0] <= req_active[0] && req_rw_0 && (req_size_0 == 2'd1) &&
+                                                           (req_address_0[23:2] == address[23:2]) && req_address_0[1];
+                                    req_prefetch_hit[1] <= 1'b0;
+                                end
+                            end else begin
+                                // 32-bit read finished: qualifies for speculative read-ahead
+                                prefetch_eligible        <= 1'b1;
+                                next_prefetch_allowed    <= 1'b1;
+                                prefetch_valid           <= 1'b0;
+                                prefetch_word0_avail     <= 1'b0;
+                                prefetch_word1_avail     <= 1'b0;
+                                req_prefetch_hit         <= 2'b00;
+                            end
+`else
                             prefetch_eligible     <= 1'b1;
                             next_prefetch_allowed <= 1'b1;
+`endif
                         end else begin
                             prefetch_eligible     <= 1'b0;
                             prefetch_valid        <= 1'b0;
+`ifdef ENABLE_16BIT_PREFETCH
+                            prefetch_word0_avail  <= 1'b0;
+                            prefetch_word1_avail  <= 1'b0;
+`endif
                             next_prefetch_allowed <= 1'b0;
                             req_prefetch_hit      <= 2'b00;
                         end
@@ -1112,6 +1267,10 @@ module m68k_interface (
         // Bus loss or Reset safety: flush prefetch cache
         if (!request_bm || reset_sync || !is_bm) begin
             prefetch_valid           <= 1'b0;
+`ifdef ENABLE_16BIT_PREFETCH
+            prefetch_word0_avail     <= 1'b0;
+            prefetch_word1_avail     <= 1'b0;
+`endif
             prefetch_eligible        <= 1'b0;
             next_prefetch_allowed    <= 1'b0;
             chained_prefetch_allowed <= 1'b0;

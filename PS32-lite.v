@@ -167,6 +167,7 @@ wire        prefetch_ctrl_en;
 wire        fast_dsack_en;
 wire        cck_sync_en;
 wire        force_phase_invert;
+wire        enable_word_prefetch;
 wire        phase_calibrated;
 wire        fast_read_phase_cal;
 wire        current_cck_phase;
@@ -288,6 +289,7 @@ zorro_device #(
     .fast_dsack_en        (fast_dsack_en),
     .cck_sync_en          (cck_sync_en),
     .force_phase_invert   (force_phase_invert),
+    .enable_word_prefetch (enable_word_prefetch),
     .counter_clear        (counter_clear)
 );
 
@@ -405,6 +407,7 @@ m68k_interface u_m68k (
     .fast_dsack_en                  (fast_dsack_en),
     .cck_sync_en                    (cck_sync_en),
     .force_phase_invert             (force_phase_invert),
+    .enable_word_prefetch           (enable_word_prefetch),
     .counter_clear                  (counter_clear)
 );
 
