@@ -42,4 +42,14 @@ bitstream:
 	efx_run --prj -f compile PS32-lite
 	gzip -c -9 outflow/PS32-lite.hex.bin > firmware.bin.gz
 
-.PHONY: all build run test bench trace waveforms clean bitstream
+M68K_CC ?= /opt/amiga/bin/m68k-amigaos-gcc
+M68K_CFLAGS ?= -O2 -noixemul -m68020 -s
+
+amiga_tools:
+	mkdir -p tools
+	$(M68K_CC) $(M68K_CFLAGS) -DMODE_NO_FAST_DSACK tools/ps32_bus_ctrl.c -o tools/PS32_NoFastDSACK
+	$(M68K_CC) $(M68K_CFLAGS) -DMODE_TURBO_OFF     tools/ps32_bus_ctrl.c -o tools/PS32_Turbo_OFF
+	$(M68K_CC) $(M68K_CFLAGS) -DMODE_TURBO_ON      tools/ps32_bus_ctrl.c -o tools/PS32_Turbo_ON
+	$(M68K_CC) $(M68K_CFLAGS)                      tools/ps32_bus_ctrl.c -o tools/PS32_BusCtrl
+
+.PHONY: all build run test bench trace waveforms clean bitstream amiga_tools
