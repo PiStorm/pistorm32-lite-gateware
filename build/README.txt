@@ -1,7 +1,7 @@
 ===============================================================================
        PiStorm32-lite 200.00 MHz Gateware Release Package
 ===============================================================================
-Firmware Version : Commit 19df0d3e-dirty
+Firmware Version : Commit 7d979e2d-dirty
 Build Date       : 2026-10-08
 Target Hardware  : Commodore Amiga 1200 + PiStorm32-lite (Efinix Trion T20)
 PLL Clock Rate   : 14x Multiplier (~198.63 MHz PAL / ~200.45 MHz NTSC)

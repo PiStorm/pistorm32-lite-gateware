@@ -207,6 +207,11 @@ int main(int argc, char **argv) {
         printf("Active Settings:\n");
         print_active_bits(new_val);
         printf("------------------------------------------------------------\n");
+        ULONG launches = zdev[0x24 / 4];
+        ULONG hits = zdev[0x28 / 4];
+        printf("Prefetch Telemetry: %lu launches, %lu hits (%.1f%% hit rate)\n",
+               launches, hits, launches ? (100.0 * hits / launches) : 0.0);
+        printf("------------------------------------------------------------\n");
         if (!(new_val & CTRL_FAST_DSACK)) {
             printf(">> Standard Motorola S4_NOP hold cycle active (Mediator TX safe).\n");
         } else {

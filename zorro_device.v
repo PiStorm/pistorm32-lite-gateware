@@ -172,19 +172,10 @@ module zorro_device #(
     reg        wb_stb_def = 1'b0;
     reg        wb_we      = 1'b0;
     reg [15:0] wb_adr     = 16'd0;
-    (* keep = "true", syn_keep = "true" *) reg [6:2]  s0_adr     = 5'd0;
-    reg [4:2]  s1_adr     = 3'd0;
-    (* keep = "true", syn_keep = "true" *) reg [6:2]  s2_adr     = 5'd0;
-    reg [7:0]  s2_pin_cfg_we = 8'd0;
-    reg [3:0]  s2_int_cfg_we = 4'd0;
-    reg        s2_gpio_oe_we = 1'b0;
-    reg        s2_gpio_out_we = 1'b0;
     reg [31:0] wb_dat_m2s = 32'd0;
     reg [3:0]  wb_sel     = 4'b0000;
     wire [31:0] wb_dat_s2m;
     wire        wb_ack;
-
-    wire is_s2_int_cfg_wr = access_wr && (access_addr[15:8] == 8'h02) && (access_addr[6:2] == 5'h11);
 
     // AutoConfig byte/word write extraction (safe against unwritten DATA_HI)
     wire [7:0] ac_wr_byte = (access_wr_data[7:0] != 8'h00) ? access_wr_data[7:0] : access_wr_data[15:8];
@@ -194,23 +185,11 @@ module zorro_device #(
     reg base_hi_written = 1'b0;
     reg base_lo_written = 1'b0;
 
-    reg        ac_wr_step = 1'b0;
-    reg        ac_step_wr_32 = 1'b0;
-    reg        ac_step_wr_16 = 1'b0;
-    reg        ac_step_wr_48 = 1'b0;
-    reg        ac_step_wr_4a = 1'b0;
-    reg        ac_step_wr_4c = 1'b0;
-    reg [3:0]  ac_step_byte_hi = 4'd0;
-    reg [3:0]  ac_step_byte_lo = 4'd0;
-    reg [31:0] ac_step_wr_data = 32'd0;
-    reg [7:0]  s2_pincfg_pre_read = 8'd0;
-
     // -------------------------------------------------------------------------
     // Main Handshake & Wishbone Master State Machine
     // -------------------------------------------------------------------------
     always @(posedge clk) begin
         if (reset) begin
-            ac_wr_step      <= 1'b0;
             z2_configured   <= 1'b0;
             z2_shutup       <= 1'b0;
             z2_base_addr    <= 24'd0;
@@ -225,13 +204,6 @@ module zorro_device #(
             wb_stb_def      <= 1'b0;
             wb_we           <= 1'b0;
             wb_adr          <= 16'd0;
-            s0_adr          <= 5'd0;
-            s1_adr          <= 3'd0;
-            s2_adr          <= 5'd0;
-            s2_pin_cfg_we   <= 8'd0;
-            s2_int_cfg_we   <= 4'd0;
-            s2_gpio_oe_we   <= 1'b0;
-            s2_gpio_out_we  <= 1'b0;
             wb_dat_m2s      <= 32'd0;
             wb_sel          <= 4'b0000;
             access_ready    <= 1'b0;
@@ -242,57 +214,48 @@ module zorro_device #(
             if (!z2_configured) begin
                 // -------------------------------------------------------------
                 // Unconfigured State: AutoConfig ROM and Address Assignment
-                // 2-Cycle write handshake decouples 18-input address matching from
-                // the z2_configured Clock Enable line, eliminating critical STA path.
                 // -------------------------------------------------------------
-                if (!access_valid)
-                    ac_wr_step <= 1'b0;
-                else if (!access_ready) begin
-                    if (!access_wr) begin
-                        access_ready   <= 1'b1;
-                        access_rd_data <= ac_read_data;
-                    end else if (!ac_wr_step) begin
-                        ac_wr_step      <= 1'b1;
-                        ac_step_wr_32   <= (access_size == 2'd3 && access_addr[6:1] == 6'h24);
-                        ac_step_wr_16   <= (access_size == 2'd1 && access_addr[6:1] == 6'h24);
-                        ac_step_wr_48   <= (access_addr[6:1] == 6'h24);
-                        ac_step_wr_4a   <= (access_addr[6:1] == 6'h25);
-                        ac_step_wr_4c   <= (access_addr[6:1] == 6'h26);
-                        ac_step_byte_hi <= ac_byte_hi;
-                        ac_step_byte_lo <= ac_byte_lo;
-                        ac_step_wr_data <= access_wr_data;
-                    end else begin
-                        ac_wr_step   <= 1'b0;
-                        access_ready <= 1'b1;
-                        if (ac_step_wr_32) begin
-                            z2_base_addr[23:20] <= ac_step_wr_data[31:28];
-                            z2_base_addr[19:16] <= ac_step_wr_data[27:24];
+                if (access_valid && !access_ready) begin
+                    access_ready   <= 1'b1;
+                    access_rd_data <= ac_read_data;
+
+                    if (access_wr) begin
+                        if (access_size == 2'd3 && access_addr[6:1] == 6'h24) begin
+                            // 32-bit write to $48 sets both Base High & Base Low
+                            z2_base_addr[23:20] <= access_wr_data[31:28];
+                            z2_base_addr[19:16] <= access_wr_data[27:24];
                             z2_base_addr[15:0]  <= 16'h0000;
                             z2_configured       <= 1'b1;
-                        end else if (ac_step_wr_16) begin
-                            z2_base_addr[23:20] <= ac_step_wr_data[15:12];
-                            z2_base_addr[19:16] <= ac_step_wr_data[11:8];
+                        end else if (access_size == 2'd1 && access_addr[6:1] == 6'h24) begin
+                            // 16-bit word write to $48 sets both Base High & Base Low
+                            z2_base_addr[23:20] <= access_wr_data[15:12];
+                            z2_base_addr[19:16] <= access_wr_data[11:8];
                             z2_base_addr[15:0]  <= 16'h0000;
                             z2_configured       <= 1'b1;
-                        end else if (ac_step_wr_48) begin
-                            z2_base_addr[23:20] <= ac_step_byte_hi;
+                        end else if (access_addr[6:1] == 6'h24) begin
+                            // Byte write to $48 (ec_BaseAddress)
+                            z2_base_addr[23:20] <= ac_byte_hi;
                             base_hi_written     <= 1'b1;
-                            if (ac_step_byte_lo != 4'h0) begin
-                                z2_base_addr[19:16] <= ac_step_byte_lo;
+                            if (ac_byte_lo != 4'h0) begin
+                                // Full byte written to $48 (contains both nibbles, e.g. $E9 from Kickstart)
+                                z2_base_addr[19:16] <= ac_byte_lo;
                                 z2_base_addr[15:0]  <= 16'h0000;
                                 z2_configured       <= 1'b1;
                             end else if (base_lo_written) begin
+                                // Low nibble was already latched by prior write to $4A
                                 z2_base_addr[15:0]  <= 16'h0000;
                                 z2_configured       <= 1'b1;
                             end
-                        end else if (ac_step_wr_4a) begin
-                            z2_base_addr[19:16] <= (ac_step_byte_hi != 4'h0) ? ac_step_byte_hi : ac_step_byte_lo;
+                        end else if (access_addr[6:1] == 6'h25) begin
+                            // Byte write to $4A (ec_BaseAddress+2, Base Low)
+                            z2_base_addr[19:16] <= (ac_byte_hi != 4'h0) ? ac_byte_hi : ac_byte_lo;
                             base_lo_written     <= 1'b1;
                             if (base_hi_written) begin
                                 z2_base_addr[15:0]  <= 16'h0000;
                                 z2_configured       <= 1'b1;
                             end
-                        end else if (ac_step_wr_4c) begin
+                        end else if (access_addr[6:1] == 6'h26) begin
+                            // Write to $4C (Shut-up command)
                             z2_shutup <= 1'b1;
                         end
                     end
@@ -312,20 +275,6 @@ module zorro_device #(
                             wb_stb_def <= (access_addr[15:8] >= 8'h03);
                             wb_we      <= access_wr;
                             wb_adr     <= access_addr[15:0];
-                            s0_adr     <= access_addr[6:2];
-                            s1_adr     <= access_addr[4:2];
-                            s2_adr     <= access_addr[6:2];
-                            s2_pin_cfg_we[0] <= access_wr && (access_addr[15:8] == 8'h02) && (access_addr[6:2] == 5'h08);
-                            s2_pin_cfg_we[1] <= access_wr && (access_addr[15:8] == 8'h02) && (access_addr[6:2] == 5'h09);
-                            s2_pin_cfg_we[2] <= access_wr && (access_addr[15:8] == 8'h02) && (access_addr[6:2] == 5'h0A);
-                            s2_pin_cfg_we[3] <= access_wr && (access_addr[15:8] == 8'h02) && (access_addr[6:2] == 5'h0B);
-                            s2_pin_cfg_we[4] <= access_wr && (access_addr[15:8] == 8'h02) && (access_addr[6:2] == 5'h0C);
-                            s2_pin_cfg_we[5] <= access_wr && (access_addr[15:8] == 8'h02) && (access_addr[6:2] == 5'h0D);
-                            s2_pin_cfg_we[6] <= access_wr && (access_addr[15:8] == 8'h02) && (access_addr[6:2] == 5'h0E);
-                            s2_pin_cfg_we[7] <= access_wr && (access_addr[15:8] == 8'h02) && (access_addr[6:2] == 5'h0F);
-                            s2_pincfg_pre_read <= pin_cfg[access_addr[4:2]];
-                            s2_gpio_out_we   <= access_wr && (access_addr[15:8] == 8'h02) && (access_addr[6:2] >= 5'h02 && access_addr[6:2] <= 5'h04);
-                            s2_gpio_oe_we    <= access_wr && (access_addr[15:8] == 8'h02) && (access_addr[6:2] >= 5'h05 && access_addr[6:2] <= 5'h07);
 
                             // Steer write data and generate Wishbone byte enables
                             case (access_size)
@@ -333,26 +282,22 @@ module zorro_device #(
                                     wb_dat_m2s <= {access_wr_data[7:0], access_wr_data[7:0],
                                                    access_wr_data[7:0], access_wr_data[7:0]};
                                     case (access_addr[1:0])
-                                        2'd0: begin wb_sel <= 4'b1000; s2_int_cfg_we <= is_s2_int_cfg_wr ? 4'b1000 : 4'd0; end
-                                        2'd1: begin wb_sel <= 4'b0100; s2_int_cfg_we <= is_s2_int_cfg_wr ? 4'b0100 : 4'd0; end
-                                        2'd2: begin wb_sel <= 4'b0010; s2_int_cfg_we <= is_s2_int_cfg_wr ? 4'b0010 : 4'd0; end
-                                        2'd3: begin wb_sel <= 4'b0001; s2_int_cfg_we <= is_s2_int_cfg_wr ? 4'b0001 : 4'd0; end
+                                        2'd0: wb_sel <= 4'b1000;
+                                        2'd1: wb_sel <= 4'b0100;
+                                        2'd2: wb_sel <= 4'b0010;
+                                        2'd3: wb_sel <= 4'b0001;
                                     endcase
                                 end
                                 2'd1: begin // 16-bit Word
                                     wb_dat_m2s <= {access_wr_data[15:0], access_wr_data[15:0]};
-                                    if (access_addr[1]) begin
-                                        wb_sel        <= 4'b0011;
-                                        s2_int_cfg_we <= is_s2_int_cfg_wr ? 4'b0011 : 4'd0;
-                                    end else begin
-                                        wb_sel        <= 4'b1100;
-                                        s2_int_cfg_we <= is_s2_int_cfg_wr ? 4'b1100 : 4'd0;
-                                    end
+                                    if (access_addr[1])
+                                        wb_sel <= 4'b0011;
+                                    else
+                                        wb_sel <= 4'b1100;
                                 end
                                 default: begin // 32-bit Longword
-                                    wb_dat_m2s   <= access_wr_data;
-                                    wb_sel       <= 4'b1111;
-                                    s2_int_cfg_we <= is_s2_int_cfg_wr ? 4'b1111 : 4'd0;
+                                    wb_dat_m2s <= access_wr_data;
+                                    wb_sel     <= 4'b1111;
                                 end
                             endcase
 
@@ -361,41 +306,37 @@ module zorro_device #(
                     end
 
                     WB_WAIT: begin
-                        // Demultiplex read data continuously during WB_WAIT so Clock Enable
-                        // is purely driven by wb_state, removing wb_ack/def_ack from the CE path.
-                        case (access_size)
-                            2'd0: begin // 8-bit Byte
-                                case (wb_adr[1:0])
-                                    2'd0: access_rd_data <= {24'd0, wb_dat_s2m[31:24]};
-                                    2'd1: access_rd_data <= {24'd0, wb_dat_s2m[23:16]};
-                                    2'd2: access_rd_data <= {24'd0, wb_dat_s2m[15:8]};
-                                    2'd3: access_rd_data <= {24'd0, wb_dat_s2m[7:0]};
-                                endcase
-                            end
-                            2'd1: begin // 16-bit Word
-                                if (wb_adr[1])
-                                    access_rd_data <= {16'd0, wb_dat_s2m[15:0]};
-                                else
-                                    access_rd_data <= {16'd0, wb_dat_s2m[31:16]};
-                            end
-                            default: begin // 32-bit Longword
-                                access_rd_data <= wb_dat_s2m;
-                            end
-                        endcase
-
                         if (wb_ack) begin
-                            wb_cyc        <= 1'b0;
-                            wb_stb        <= 1'b0;
-                            wb_stb_s0     <= 1'b0;
-                            wb_stb_s1     <= 1'b0;
-                            wb_stb_s2     <= 1'b0;
-                            wb_stb_def    <= 1'b0;
-                            s2_pin_cfg_we  <= 8'd0;
-                            s2_int_cfg_we  <= 4'd0;
-                            s2_gpio_oe_we  <= 1'b0;
-                            s2_gpio_out_we <= 1'b0;
-                            access_ready   <= 1'b1;
-                            wb_state       <= WB_IDLE;
+                            wb_cyc       <= 1'b0;
+                            wb_stb       <= 1'b0;
+                            wb_stb_s0    <= 1'b0;
+                            wb_stb_s1    <= 1'b0;
+                            wb_stb_s2    <= 1'b0;
+                            wb_stb_def   <= 1'b0;
+                            access_ready <= 1'b1;
+
+                            // Demultiplex read data for Pi host buffer
+                            case (access_size)
+                                2'd0: begin // 8-bit Byte
+                                    case (wb_adr[1:0])
+                                        2'd0: access_rd_data <= {24'd0, wb_dat_s2m[31:24]};
+                                        2'd1: access_rd_data <= {24'd0, wb_dat_s2m[23:16]};
+                                        2'd2: access_rd_data <= {24'd0, wb_dat_s2m[15:8]};
+                                        2'd3: access_rd_data <= {24'd0, wb_dat_s2m[7:0]};
+                                    endcase
+                                end
+                                2'd1: begin // 16-bit Word
+                                    if (wb_adr[1])
+                                        access_rd_data <= {16'd0, wb_dat_s2m[15:0]};
+                                    else
+                                        access_rd_data <= {16'd0, wb_dat_s2m[31:16]};
+                                end
+                                default: begin // 32-bit Longword
+                                    access_rd_data <= wb_dat_s2m;
+                                end
+                            endcase
+
+                            wb_state <= WB_IDLE;
                         end
                     end
                 endcase
@@ -426,14 +367,10 @@ module zorro_device #(
             def_ack <= wb_stb_def && !def_ack;
     end
 
-    assign wb_ack = wb_stb_s0 ? s0_ack :
-                    wb_stb_s1 ? s1_ack :
-                    wb_stb_s2 ? s2_ack :
-                    def_ack;
-
-    assign wb_dat_s2m = wb_stb_s0 ? s0_dat_o :
-                        wb_stb_s1 ? s1_dat_o :
-                        wb_stb_s2 ? s2_dat_o :
+    assign wb_ack = s0_ack | s1_ack | s2_ack | def_ack;
+    assign wb_dat_s2m = s0_ack ? s0_dat_o :
+                        s1_ack ? s1_dat_o :
+                        s2_ack ? s2_dat_o :
                         32'h00000000;
 
     // =========================================================================
@@ -494,7 +431,7 @@ module zorro_device #(
                 s0_ack_reg <= 1'b1;
 
                 // Read Multiplexer
-                case (s0_adr)
+                case (wb_adr[6:2])
                     5'h00: s0_reg_data <= 32'h50533332; // "PS32"
                     5'h01: s0_reg_data <= {Z2_MANUF_ID, Z2_PROD_ID, 8'h01}; // 0x6D743201
                     5'h02: s0_reg_data <= {8'h00, z2_base_addr[23:16], 15'd0, z2_configured};
@@ -517,7 +454,7 @@ module zorro_device #(
 
                 // Write Handling
                 if (wb_we) begin
-                    case (s0_adr)
+                    case (wb_adr[6:2])
                         5'h03: begin // Scratchpad write with byte lane enables
                             if (wb_sel[3]) z2_scratchpad[31:24] <= wb_dat_m2s[31:24];
                             if (wb_sel[2]) z2_scratchpad[23:16] <= wb_dat_m2s[23:16];
@@ -591,7 +528,7 @@ module zorro_device #(
             if (wb_stb_s1 && !s1_ack_reg) begin
                 s1_ack_reg <= 1'b1;
 
-                case (s1_adr)
+                case (wb_adr[4:2])
                     3'h0: s1_reg_data <= spi_ctrl;
                     3'h1: s1_reg_data <= spi_data;
                     3'h2: s1_reg_data <= spi_clkdiv;
@@ -599,7 +536,7 @@ module zorro_device #(
                 endcase
 
                 if (wb_we) begin
-                    case (s1_adr)
+                    case (wb_adr[4:2])
                         3'h0: begin
                             if (wb_sel[0]) spi_ctrl[7:0]   <= wb_dat_m2s[7:0];
                             if (wb_sel[1]) spi_ctrl[15:8]  <= wb_dat_m2s[15:8];
@@ -704,7 +641,7 @@ module zorro_device #(
                 // Read Multiplexer ($0200..$02FF)
                 // Upper 24 bits [31:8]: Only 3 valid 32-bit registers (iomux_ctrl, in_mat_sel, gpio_int_cfg_reg)
                 // drastically reducing logic depth and wb_adr fanout for timing closure.
-                case (s2_adr)
+                case (wb_adr[6:2])
                     5'h00:   s2_reg_data[31:8] <= iomux_ctrl[31:8];
                     5'h10:   s2_reg_data[31:8] <= in_mat_sel[31:8];
                     5'h11:   s2_reg_data[31:8] <= gpio_int_cfg_reg[31:8];
@@ -712,14 +649,19 @@ module zorro_device #(
                 endcase
 
                 // Lower 8 bits [7:0]: All registers mapped to LSB
-                case (s2_adr)
+                case (wb_adr[6:2])
                     5'h00:   s2_reg_data[7:0] <= iomux_ctrl[7:0];
                     5'h01:   s2_reg_data[7:0] <= spare_sync_1;
                     5'h02:   s2_reg_data[7:0] <= gpio_out;
                     5'h05:   s2_reg_data[7:0] <= gpio_oe;
-                    5'h08, 5'h09, 5'h0A, 5'h0B,
-                    5'h0C, 5'h0D, 5'h0E, 5'h0F:
-                             s2_reg_data[7:0] <= s2_pincfg_pre_read;
+                    5'h08:   s2_reg_data[7:0] <= pin_cfg[0];
+                    5'h09:   s2_reg_data[7:0] <= pin_cfg[1];
+                    5'h0A:   s2_reg_data[7:0] <= pin_cfg[2];
+                    5'h0B:   s2_reg_data[7:0] <= pin_cfg[3];
+                    5'h0C:   s2_reg_data[7:0] <= pin_cfg[4];
+                    5'h0D:   s2_reg_data[7:0] <= pin_cfg[5];
+                    5'h0E:   s2_reg_data[7:0] <= pin_cfg[6];
+                    5'h0F:   s2_reg_data[7:0] <= pin_cfg[7];
                     5'h10:   s2_reg_data[7:0] <= in_mat_sel[7:0];
                     5'h11:   s2_reg_data[7:0] <= gpio_int_cfg_reg[7:0];
                     5'h12:   s2_reg_data[7:0] <= gpio_int_pending;
@@ -728,17 +670,7 @@ module zorro_device #(
 
                 // Write Handling
                 if (wb_we) begin
-                    // Per-pin configuration registers updated directly via dedicated one-hot write enables
-                    if (s2_pin_cfg_we[0]) pin_cfg[0] <= wb_dat_m2s[7:0];
-                    if (s2_pin_cfg_we[1]) pin_cfg[1] <= wb_dat_m2s[7:0];
-                    if (s2_pin_cfg_we[2]) pin_cfg[2] <= wb_dat_m2s[7:0];
-                    if (s2_pin_cfg_we[3]) pin_cfg[3] <= wb_dat_m2s[7:0];
-                    if (s2_pin_cfg_we[4]) pin_cfg[4] <= wb_dat_m2s[7:0];
-                    if (s2_pin_cfg_we[5]) pin_cfg[5] <= wb_dat_m2s[7:0];
-                    if (s2_pin_cfg_we[6]) pin_cfg[6] <= wb_dat_m2s[7:0];
-                    if (s2_pin_cfg_we[7]) pin_cfg[7] <= wb_dat_m2s[7:0];
-
-                    case (s2_adr)
+                    case (wb_adr[6:2])
                         5'h00: begin // IOMUX_CTRL
                             if (wb_sel[0]) iomux_ctrl[7:0]   <= wb_dat_m2s[7:0];
                             if (wb_sel[1]) iomux_ctrl[15:8]  <= wb_dat_m2s[15:8];
@@ -746,23 +678,31 @@ module zorro_device #(
                             if (wb_sel[3]) iomux_ctrl[31:24] <= wb_dat_m2s[31:24];
                         end
                         5'h02: begin // GPIO_OUT (Direct Write)
-                            if (s2_gpio_out_we) gpio_out <= wb_dat_m2s[7:0];
+                            if (|wb_sel) gpio_out <= wb_dat_m2s[7:0];
                         end
                         5'h03: begin // GPIO_OUT_SET (W1TS - Atomic Bit Set)
-                            if (s2_gpio_out_we) gpio_out <= gpio_out | wb_dat_m2s[7:0];
+                            if (|wb_sel) gpio_out <= gpio_out | wb_dat_m2s[7:0];
                         end
                         5'h04: begin // GPIO_OUT_CLR (W1TC - Atomic Bit Clear)
-                            if (s2_gpio_out_we) gpio_out <= gpio_out & ~wb_dat_m2s[7:0];
+                            if (|wb_sel) gpio_out <= gpio_out & ~wb_dat_m2s[7:0];
                         end
                         5'h05: begin // GPIO_DIR (Direct Write)
-                            if (s2_gpio_oe_we) gpio_oe <= wb_dat_m2s[7:0];
+                            if (|wb_sel) gpio_oe <= wb_dat_m2s[7:0];
                         end
                         5'h06: begin // GPIO_DIR_SET (W1TS - Atomic Direction Set)
-                            if (s2_gpio_oe_we) gpio_oe <= gpio_oe | wb_dat_m2s[7:0];
+                            if (|wb_sel) gpio_oe <= gpio_oe | wb_dat_m2s[7:0];
                         end
                         5'h07: begin // GPIO_DIR_CLR (W1TC - Atomic Direction Clear)
-                            if (s2_gpio_oe_we) gpio_oe <= gpio_oe & ~wb_dat_m2s[7:0];
+                            if (|wb_sel) gpio_oe <= gpio_oe & ~wb_dat_m2s[7:0];
                         end
+                        5'h08: if (|wb_sel) pin_cfg[0] <= wb_dat_m2s[7:0]; // PIN_CFG0
+                        5'h09: if (|wb_sel) pin_cfg[1] <= wb_dat_m2s[7:0]; // PIN_CFG1
+                        5'h0A: if (|wb_sel) pin_cfg[2] <= wb_dat_m2s[7:0]; // PIN_CFG2
+                        5'h0B: if (|wb_sel) pin_cfg[3] <= wb_dat_m2s[7:0]; // PIN_CFG3
+                        5'h0C: if (|wb_sel) pin_cfg[4] <= wb_dat_m2s[7:0]; // PIN_CFG4
+                        5'h0D: if (|wb_sel) pin_cfg[5] <= wb_dat_m2s[7:0]; // PIN_CFG5
+                        5'h0E: if (|wb_sel) pin_cfg[6] <= wb_dat_m2s[7:0]; // PIN_CFG6
+                        5'h0F: if (|wb_sel) pin_cfg[7] <= wb_dat_m2s[7:0]; // PIN_CFG7
                         5'h10: begin // IN_MAT_SEL
                             if (wb_sel[0]) in_mat_sel[7:0]   <= wb_dat_m2s[7:0];
                             if (wb_sel[1]) in_mat_sel[15:8]  <= wb_dat_m2s[15:8];
@@ -770,10 +710,10 @@ module zorro_device #(
                             if (wb_sel[3]) in_mat_sel[31:24] <= wb_dat_m2s[31:24];
                         end
                         5'h11: begin // GPIO_INT_CFG
-                            if (s2_int_cfg_we[0]) gpio_int_cfg_reg[7:0]   <= wb_dat_m2s[7:0];
-                            if (s2_int_cfg_we[1]) gpio_int_cfg_reg[15:8]  <= wb_dat_m2s[15:8];
-                            if (s2_int_cfg_we[2]) gpio_int_cfg_reg[23:16] <= wb_dat_m2s[23:16];
-                            if (s2_int_cfg_we[3]) gpio_int_cfg_reg[31:24] <= wb_dat_m2s[31:24];
+                            if (wb_sel[0]) gpio_int_cfg_reg[7:0]   <= wb_dat_m2s[7:0];
+                            if (wb_sel[1]) gpio_int_cfg_reg[15:8]  <= wb_dat_m2s[15:8];
+                            if (wb_sel[2]) gpio_int_cfg_reg[23:16] <= wb_dat_m2s[23:16];
+                            if (wb_sel[3]) gpio_int_cfg_reg[31:24] <= wb_dat_m2s[31:24];
                         end
                         5'h12: begin // GPIO_INT_STATUS (W1C)
                             if (|wb_sel) gpio_int_pending <= (gpio_int_pending & ~wb_dat_m2s[7:0]) | gpio_triggers_q;

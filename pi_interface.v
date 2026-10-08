@@ -70,11 +70,6 @@ module pi_interface (
     output wire        req_rw_1,
     output wire [2:0]  req_fc_0,
     output wire [2:0]  req_fc_1,
-    input  wire [7:0]  prefetch_addr_hi,               // Bits [23:16] of prefetch address
-    input  wire        enable_16bit_prefetch,          // 1 = Enable 16-bit prefetch matching
-    output wire        req_is_chip_or_custom_0,        // Precalculated Chip/Custom flag for slot 0
-    output wire        req_is_chip_or_custom_1,        // Precalculated Chip/Custom flag for slot 1
-    output wire        new_req_pf_match,               // Precalculated prefetch high match
 
     // -------------------------------------------------------------------------
     // Slot Pointer Override (when PI writes PI_REG_SLOT)
@@ -85,12 +80,8 @@ module pi_interface (
     // -------------------------------------------------------------------------
     // Slot Completion Handshake (from m68k_interface)
     // -------------------------------------------------------------------------
-    input  wire        slot0_complete_valid,   // Slot 0 completion pulse
-    input  wire        slot1_complete_valid,   // Slot 1 completion pulse
     input  wire        slot_complete_valid,    // 1-cycle completion pulse
     input  wire        slot_complete_id,       // Slot ID (0 or 1) being completed
-    input  wire [31:0] slot0_complete_data,    // Slot 0 read data returned
-    input  wire [31:0] slot1_complete_data,    // Slot 1 read data returned
     input  wire [31:0] slot_complete_data,     // Data read from Amiga bus or Z2 registers
     input  wire        slot_complete_normally  // 1 = Terminated with DSACK, 0 = BERR
 );
@@ -191,15 +182,6 @@ module pi_interface (
     // =========================================================================
     (* async_reg = "true" *) reg [1:0] pi_wr_sync;
     reg [15:0] q_PI_D_IN;
-    reg [1:0]  req_addr_lo_is_zero   = 2'b00;
-    reg [1:0]  req_is_chip_or_custom = 2'b00;
-    reg        new_req_pf_hi_match   = 1'b0;
-    reg        new_req_pf_rw_match   = 1'b0;
-    reg        new_req_pf_sz_match   = 1'b0;
-
-    assign new_req_pf_match        = new_req_pf_hi_match && new_req_pf_rw_match && new_req_pf_sz_match;
-    assign req_is_chip_or_custom_0 = req_is_chip_or_custom[0];
-    assign req_is_chip_or_custom_1 = req_is_chip_or_custom[1];
 
     // Strobe signals to m68k_interface for new request dispatch
     assign new_req_valid = (pi_wr_sync == 2'b10) && (PI_A == PI_REG_ADDR_HI);
@@ -211,22 +193,14 @@ module pi_interface (
     always @(posedge clk) begin
         pi_wr_sync <= {pi_wr_sync[0], PI_WR};
         q_PI_D_IN  <= PI_D_IN;
-        new_req_pf_hi_match <= (PI_D_IN[7:0] == prefetch_addr_hi);
-        new_req_pf_rw_match <= PI_D_IN[10];
-        new_req_pf_sz_match <= (PI_D_IN[9:8] == 2'd3) || (enable_16bit_prefetch && (PI_D_IN[9:8] == 2'd1));
 
         set_execute_slot_valid <= 1'b0;
 
         // Capture completed slot transactions from m68k_interface
-        if (slot0_complete_valid) begin
-            req_data_read[0]           <= slot0_complete_data;
-            req_terminated_normally[0] <= slot_complete_normally;
-            req_active[0]              <= 1'b0;
-        end
-        if (slot1_complete_valid) begin
-            req_data_read[1]           <= slot1_complete_data;
-            req_terminated_normally[1] <= slot_complete_normally;
-            req_active[1]              <= 1'b0;
+        if (slot_complete_valid) begin
+            req_data_read[slot_complete_id]           <= slot_complete_data;
+            req_terminated_normally[slot_complete_id] <= slot_complete_normally;
+            req_active[slot_complete_id]              <= 1'b0;
         end
 
         // Falling edge of PI_WR: execute register write
@@ -234,23 +208,19 @@ module pi_interface (
             case (PI_A)
                 PI_REG_DATA_LO: req_data_write[current_pi_slot][15:0] <= q_PI_D_IN;
                 PI_REG_DATA_HI: req_data_write[current_pi_slot][31:16] <= q_PI_D_IN;
-                PI_REG_ADDR_LO: begin
-                    req_address[current_pi_slot][15:0]   <= q_PI_D_IN;
-                    req_addr_lo_is_zero[current_pi_slot] <= (q_PI_D_IN[15:7] == 9'd0);
-                end
+                PI_REG_ADDR_LO: req_address[current_pi_slot][15:0] <= q_PI_D_IN;
                 PI_REG_ADDR_HI: begin
                     req_address[current_pi_slot][23:16] <= q_PI_D_IN[7:0];
                     req_size[current_pi_slot]           <= q_PI_D_IN[9:8];
                     req_rw[current_pi_slot]             <= q_PI_D_IN[10];
                     req_fc[current_pi_slot]             <= q_PI_D_IN[13:11];
                     req_active[current_pi_slot]         <= 1'b1;
-                    req_is_chip_or_custom[current_pi_slot] <= (q_PI_D_IN[7:5] == 3'b000) || (q_PI_D_IN[7:0] == 8'hDF);
 
                     // Synchronously precalculate if this access targets our virtual Zorro card
                     // Unconfigured card responds at $00E80000..$00E8007E.
                     // Configured card responds at base_addr_hi ($00E9xxxx etc.).
                     req_internal_intercept[current_pi_slot] <= !z2_shutup && (
-                        (!z2_configured && (q_PI_D_IN[7:0] == 8'hE8) && req_addr_lo_is_zero[current_pi_slot]) ||
+                        (!z2_configured && (q_PI_D_IN[7:0] == 8'hE8) && (req_address[current_pi_slot][15:7] == 9'd0)) ||
                         (z2_configured && (q_PI_D_IN[7:0] == z2_base_addr_hi))
                     );
                 end
@@ -276,8 +246,6 @@ module pi_interface (
         // Bus reset invalidates any internal intercepts
         if (reset_sync || drive_reset) begin
             req_internal_intercept <= 2'b00;
-            req_addr_lo_is_zero    <= 2'b00;
-            req_is_chip_or_custom  <= 2'b00;
         end
     end
 
