@@ -356,26 +356,35 @@ static void render_scope(int is_frozen) {
         }
     }
 
-    /* Trace 1: MC_CLK (14.18 MHz) */
+    /* Timing references: State S1 (/AS assert) is anchored at 35ns */
+    int as_start_ns = 35;
+    int as_start_px = (as_start_ns * c_w) / max_ns;
+    ULONG half_per_ps = (avg_ps > 0) ? (avg_ps / 2UL) : 35242UL;
+    ULONG half_per_ns = (half_per_ps + 500UL) / 1000UL;
+
+    /* Trace 1: MC_CLK (Trigger-anchored to /AS assertion at S1, sub-ns precision) */
     SetAPen(rp, pen_clk);
     SetBPen(rp, pen_bg);
     Move(rp, left + 4, c_y + 16);
     Text(rp, (STRPTR)"MC_CLK", 6);
 
-    ULONG clk_hi_ns = (clk_hi_t * TICK_PS) / 1000UL;
-    ULONG clk_lo_ns = (clk_lo_t * TICK_PS) / 1000UL;
-    if (clk_hi_ns < 15 || clk_hi_ns > 80) clk_hi_ns = 35;
-    if (clk_lo_ns < 15 || clk_lo_ns > 80) clk_lo_ns = 35;
-
-    int clk_trans[60];
+    int clk_trans[80];
     int t_idx = 0;
-    int cur_clk_val = 0; /* start low */
+    int cur_clk_val = 1; /* State S0 (0..as_start_ns) is HIGH */
     clk_trans[t_idx++] = cur_clk_val;
 
-    int cur_ns = 0;
-    while (cur_ns < max_ns && t_idx < 56) {
-        cur_ns += cur_clk_val ? clk_hi_ns : clk_lo_ns;
-        int px = (cur_ns * c_w) / max_ns;
+    /* Edge at as_start_ns (35ns): MC_CLK falls LOW entering State S1 */
+    cur_clk_val = 0;
+    clk_trans[t_idx++] = as_start_px;
+    clk_trans[t_idx++] = cur_clk_val;
+
+    /* Advance subsequent clock edges from S1 in precise picoseconds */
+    ULONG t_ps = (ULONG)as_start_ns * 1000UL;
+    while (t_idx < 76) {
+        t_ps += half_per_ps;
+        ULONG t_ns = t_ps / 1000UL;
+        if (t_ns > (ULONG)max_ns) break;
+        int px = (t_ns * c_w) / max_ns;
         if (px > c_w) px = c_w;
         cur_clk_val = !cur_clk_val;
         clk_trans[t_idx++] = px;
@@ -390,8 +399,6 @@ static void render_scope(int is_frozen) {
     Move(rp, left + 4, c_y + 54);
     Text(rp, (STRPTR)"/AS", 3);
 
-    int as_start_ns = 35;
-    int as_start_px = (as_start_ns * c_w) / max_ns;
     int as_width_px = (as_ns * c_w) / max_ns;
     if (as_width_px < 10) as_width_px = (230 * c_w) / max_ns;
     int as_end_px = as_start_px + as_width_px;
@@ -410,7 +417,7 @@ static void render_scope(int is_frozen) {
     Move(rp, left + 4, c_y + 92);
     Text(rp, (STRPTR)"/DS", 3);
 
-    int ds_start_ns = is_read ? as_start_ns : (as_start_ns + clk_hi_ns);
+    int ds_start_ns = is_read ? as_start_ns : (as_start_ns + (int)half_per_ns);
     int ds_start_px = (ds_start_ns * c_w) / max_ns;
     if (ds_start_px > as_end_px) ds_start_px = as_start_px;
 
@@ -464,10 +471,10 @@ static void render_scope(int is_frozen) {
     SetBPen(rp, pen_bg);
     SetAPen(rp, pen_accent);
 
-    int s0_px = ((as_start_ns >= 35 ? as_start_ns - 35 : 0) * c_w) / max_ns;
-    int s1_px = (as_start_ns * c_w) / max_ns;
-    int s2_px = s1_px + (18 * c_w) / max_ns;
-    int s3_px = s1_px + (35 * c_w) / max_ns;
+    int s0_px = ((as_start_ns >= (int)half_per_ns ? as_start_ns - (int)half_per_ns : 0) * c_w) / max_ns;
+    int s1_px = as_start_px;
+    int s2_px = ((as_start_ns + (int)half_per_ns) * c_w) / max_ns;
+    int s3_px = ((as_start_ns + (int)(2 * half_per_ns)) * c_w) / max_ns;
 
     Move(rp, c_x + s0_px + 2, c_y + 36); Text(rp, (STRPTR)"S0", 2);
     if (s2_px - s1_px >= 18) {
