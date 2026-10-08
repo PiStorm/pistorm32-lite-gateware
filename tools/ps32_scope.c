@@ -77,7 +77,7 @@ static int custom_pens_allocated = 0;
 static LONG allocated_pens[10];
 static int alloc_pen_count = 0;
 
-#define TICK_PS 5035UL /* 5.035 ns per 198.6 MHz FPGA PLL tick (14x MC_CLK) */
+#define TICK_PS 5000UL /* 5.000 ns per 200.00 MHz FPGA PLL tick */
 
 /* Trigger & Filtering modes: AUTO (ambient), READ (locked), WRITE (locked) */
 enum TriggerMode {
@@ -94,9 +94,9 @@ static ULONG last_write_timing  = 0;
 static ULONG last_read_capture  = 0;
 static ULONG last_read_timing   = 0;
 
-/* Zoom presets: Default 700ns (Auto R/W: full 570ns writes and reads fit), 400ns (Turbo R), 1200ns (1x wide) */
-static const int zoom_presets[] = { 700, 400, 1200 };
-static const char *zoom_names[] = { "700ns (Auto R/W)", "400ns (Turbo R)", "1200ns (1x Wide)" };
+/* Zoom presets: AUTO (adapts to cycle duration: 500ns for reads, 800ns for writes), 450ns, 800ns, 1400ns */
+static const int zoom_presets[] = { 0, 450, 800, 1400 };
+static const char *zoom_names[] = { "AUTO (Fit Cycle)", "450ns (Detail)", "800ns (Normal)", "1400ns (Wide)" };
 static int zoom_idx = 0;
 
 static LONG alloc_color(ULONG r, ULONG g, ULONG b, LONG fallback) {
@@ -248,10 +248,24 @@ static void render_scope(int is_frozen) {
     int   last_rw        = (capture >> 15) & 1;
     ULONG pw_s5          = (capture >> 8) & 3;
 
-    ULONG clk_per_t      = (clk_ph >> 16) & 0xFF;
-    ULONG clk_hi_t       = (clk_ph >> 8) & 0xFF;
-    ULONG clk_lo_t       = clk_ph & 0xFF;
-    ULONG clk_per_ns     = (clk_per_t * TICK_PS) / 1000UL;
+    /* Average 32 samples of 14MHz clock phase for jitter-free sub-nanosecond precision */
+    ULONG clk_per_sum = 0;
+    ULONG clk_hi_sum  = 0;
+    ULONG clk_lo_sum  = 0;
+    for (int i = 0; i < 32; i++) {
+        ULONG s = zdev[ZREG_CLOCK_PHASE / 4];
+        clk_per_sum += (s >> 16) & 0xFF;
+        clk_hi_sum  += (s >> 8) & 0xFF;
+        clk_lo_sum  += s & 0xFF;
+    }
+    ULONG clk_hi_t   = (clk_hi_sum + 16) / 32;
+    ULONG clk_lo_t   = (clk_lo_sum + 16) / 32;
+    ULONG clk_per_t  = (clk_per_sum + 16) / 32;
+    ULONG avg_ps     = (clk_per_sum > 0) ? (clk_per_sum * TICK_PS) / 32UL : 70484UL;
+    ULONG clk_per_ns = (avg_ps + 500UL) / 1000UL;
+    ULONG freq_10khz = (avg_ps > 0) ? (100000000UL / avg_ps) : 1419UL;
+    ULONG freq_mhz   = freq_10khz / 100UL;
+    ULONG freq_rem   = freq_10khz % 100UL;
 
     int fast_dsack_en    = (ctrl >> 1) & 1;
     int pref_en          = ctrl & 1;
@@ -266,7 +280,19 @@ static void render_scope(int is_frozen) {
     int left = win->BorderLeft + 8;
     int top  = win->BorderTop + 4;
     int w    = win->Width - win->BorderLeft - win->BorderRight - 16;
-    int max_ns = zoom_presets[zoom_idx];
+
+    int max_ns;
+    if (zoom_presets[zoom_idx] == 0) {
+        /* AUTO (Fit Cycle): adapt to actual cycle duration so action is never squeezed or clipped */
+        ULONG cycle_end_ns = 35 + as_ns + 50;
+        if (cycle_end_ns > 450) {
+            max_ns = 800;  /* Full write cycles (~580ns) and slow reads fit with ample margin */
+        } else {
+            max_ns = 450;  /* Fast Turbo reads (~230-350ns) fill the screen nicely */
+        }
+    } else {
+        max_ns = zoom_presets[zoom_idx];
+    }
 
     SetDrMd(rp, JAM2);
     SetBPen(rp, pen_bg);
@@ -306,7 +332,7 @@ static void render_scope(int is_frozen) {
     int c_h = 240;
 
     SetAPen(rp, pen_bg);
-    RectFill(rp, left, c_y - 4, left + w, c_y + c_h + 10);
+    RectFill(rp, left, c_y - 14, left + w, c_y + c_h + 10);
 
     /* Draw Scope Graticule (dynamic scale) */
     int grid_step = (max_ns <= 300) ? 25 : (max_ns <= 600) ? 50 : 100;
@@ -480,10 +506,6 @@ static void render_scope(int is_frozen) {
              as_ns, as_ticks, ws_14m, ws_14m * 70UL, dsack_at_high ? "HIGH (S4/S2)" : "LOW (S3/S1)");
     Move(rp, left + 4, b_y + 29); Text(rp, (STRPTR)buf, strlen(buf));
 
-    ULONG freq_10khz = (clk_per_t > 0) ? (100000000UL / (clk_per_t * TICK_PS)) : 1419UL;
-    ULONG freq_mhz = freq_10khz / 100UL;
-    ULONG freq_rem = freq_10khz % 100UL;
-
     snprintf(buf, sizeof(buf), "  14MHz Clock: %lu.%02lu MHz (Per %luns, Hi %luns, Lo %luns) | CCK Phase: %d",
              freq_mhz, freq_rem,
              clk_per_ns, (clk_hi_t * TICK_PS) / 1000UL, (clk_lo_t * TICK_PS) / 1000UL, cck_phase);
@@ -620,10 +642,28 @@ int main(int argc, char **argv) {
     volatile ULONG *chip_test_buf = (volatile ULONG *)AllocMem(1024, MEMF_CHIP | MEMF_CLEAR);
     if (chip_test_buf) {
         if (trig_mode == TRIG_WRITE) {
-            chip_test_buf[0] = 0xCAFEBABE;
+            for (int k = 0; k < 10; k++) {
+                chip_test_buf[0] = 0xCAFEBABE;
+                ULONG cap = zdev[ZREG_BUS_CAPTURE / 4];
+                ULONG tim = zdev[ZREG_CYCLE_TIMING / 4];
+                if (((cap >> 15) & 1) == 0) {
+                    last_write_capture = cap;
+                    last_write_timing  = tim;
+                    break;
+                }
+            }
         } else {
-            volatile ULONG dummy = chip_test_buf[0];
-            (void)dummy;
+            for (int k = 0; k < 10; k++) {
+                volatile ULONG dummy = chip_test_buf[0];
+                (void)dummy;
+                ULONG cap = zdev[ZREG_BUS_CAPTURE / 4];
+                ULONG tim = zdev[ZREG_CYCLE_TIMING / 4];
+                if (((cap >> 15) & 1) == 1) {
+                    last_read_capture = cap;
+                    last_read_timing  = tim;
+                    break;
+                }
+            }
         }
     }
 
@@ -650,7 +690,7 @@ int main(int argc, char **argv) {
                     is_frozen = !is_frozen;
                     render_scope(is_frozen);
                 } else if (c == 'z' || c == 'Z') {
-                    zoom_idx = (zoom_idx + 1) % 3;
+                    zoom_idx = (zoom_idx + 1) % 4;
                     render_scope(is_frozen);
                 } else if (c == 'w' || c == 'W') {
                     if (trig_mode == TRIG_WRITE) {
@@ -658,7 +698,16 @@ int main(int argc, char **argv) {
                     } else {
                         trig_mode = TRIG_WRITE;
                         if (chip_test_buf) {
-                            chip_test_buf[0] = 0xCAFEBABE;
+                            for (int k = 0; k < 10; k++) {
+                                chip_test_buf[0] = 0xCAFEBABE;
+                                ULONG cap = zdev[ZREG_BUS_CAPTURE / 4];
+                                ULONG tim = zdev[ZREG_CYCLE_TIMING / 4];
+                                if (((cap >> 15) & 1) == 0) {
+                                    last_write_capture = cap;
+                                    last_write_timing  = tim;
+                                    break;
+                                }
+                            }
                         }
                     }
                     render_scope(is_frozen);
@@ -668,8 +717,17 @@ int main(int argc, char **argv) {
                     } else {
                         trig_mode = TRIG_READ;
                         if (chip_test_buf) {
-                            volatile ULONG dummy = chip_test_buf[0];
-                            (void)dummy;
+                            for (int k = 0; k < 10; k++) {
+                                volatile ULONG dummy = chip_test_buf[0];
+                                (void)dummy;
+                                ULONG cap = zdev[ZREG_BUS_CAPTURE / 4];
+                                ULONG tim = zdev[ZREG_CYCLE_TIMING / 4];
+                                if (((cap >> 15) & 1) == 1) {
+                                    last_read_capture = cap;
+                                    last_read_timing  = tim;
+                                    break;
+                                }
+                            }
                         }
                     }
                     render_scope(is_frozen);
@@ -688,9 +746,21 @@ int main(int argc, char **argv) {
                 if (!is_frozen && (tick_count % 2 == 0)) { /* Refresh ~5-10 times/sec */
                     if (trig_mode == TRIG_WRITE && chip_test_buf) {
                         chip_test_buf[0] = 0xCAFEBABE;
+                        ULONG cap = zdev[ZREG_BUS_CAPTURE / 4];
+                        ULONG tim = zdev[ZREG_CYCLE_TIMING / 4];
+                        if (((cap >> 15) & 1) == 0) {
+                            last_write_capture = cap;
+                            last_write_timing  = tim;
+                        }
                     } else if (trig_mode == TRIG_READ && chip_test_buf) {
                         volatile ULONG dummy = chip_test_buf[0];
                         (void)dummy;
+                        ULONG cap = zdev[ZREG_BUS_CAPTURE / 4];
+                        ULONG tim = zdev[ZREG_CYCLE_TIMING / 4];
+                        if (((cap >> 15) & 1) == 1) {
+                            last_read_capture = cap;
+                            last_read_timing  = tim;
+                        }
                     }
                     render_scope(is_frozen);
                 }

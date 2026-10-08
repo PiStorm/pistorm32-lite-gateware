@@ -31,6 +31,8 @@ static ULONG eclock_freq = 0;
 #define ZREG_CYCLE_TIMING 0x30
 #define ZREG_CLOCK_PHASE  0x34
 
+#define TICK_PS 5000UL /* 5.000 ns per 200.00 MHz FPGA clock tick */
+
 static volatile ULONG *zorro_dev = NULL;
 
 static void print_diag_status(const char *label) {
@@ -88,9 +90,9 @@ static void print_diag_status(const char *label) {
     ULONG clk_high_ticks   = (clk_phase >> 8) & 0xFF;
     ULONG clk_low_ticks    = clk_phase & 0xFF;
 
-    ULONG as_total_ns    = (as_total_ticks * 5495UL) / 1000UL;
-    ULONG as_to_dsack_ns = (as_to_dsack_ticks * 5495UL) / 1000UL;
-    ULONG lead_ns        = (dsack_lead_ticks * 5495UL) / 1000UL;
+    ULONG as_total_ns    = (as_total_ticks * TICK_PS) / 1000UL;
+    ULONG as_to_dsack_ns = (as_to_dsack_ticks * TICK_PS) / 1000UL;
+    ULONG lead_ns        = (dsack_lead_ticks * TICK_PS) / 1000UL;
     ULONG dead_time_ns   = (as_total_ns > as_to_dsack_ns) ? (as_total_ns - as_to_dsack_ns) : 0;
 
     const char *pw_str = (port_width == 3) ? "32-bit" : (port_width == 1) ? "16-bit" : (port_width == 0) ? "8-bit" : "unknown";
@@ -119,9 +121,9 @@ static void print_diag_status(const char *label) {
            dsack_at_high ? "HIGH (Phase S4/S2)" : "LOW (Phase S3/S1)", dsack_lead_ticks, lead_ns, as_start_phase);
     printf("    Motherboard 14MHz Clock Profile (+$34 = 0x%08lX):\n", clk_phase);
     printf("      Period: %lu ticks (~%lu ns) | High: %lu ticks (~%lu ns) | Low: %lu ticks (~%lu ns)\n",
-           clk_period_ticks, (clk_period_ticks * 5495UL) / 1000UL,
-           clk_high_ticks, (clk_high_ticks * 5495UL) / 1000UL,
-           clk_low_ticks, (clk_low_ticks * 5495UL) / 1000UL);
+           clk_period_ticks, (clk_period_ticks * TICK_PS) / 1000UL,
+           clk_high_ticks, (clk_high_ticks * TICK_PS) / 1000UL,
+           clk_low_ticks, (clk_low_ticks * TICK_PS) / 1000UL);
 }
 
 static int init_timer(void) {
@@ -487,8 +489,8 @@ static void profile_cycles(volatile ULONG *chip_ptr, const char *title, ULONG ct
         ULONG wait_states_14m   = (timing >> 8) & 0xF;
         ULONG dsack_lead_ticks  = (timing >> 4) & 0xF;
         int as_start_phase      = (timing >> 2) & 1;
-        ULONG as_total_ns    = (as_total_ticks * 5495UL) / 1000UL;
-        ULONG as_to_dsack_ns = (as_to_dsack_ticks * 5495UL) / 1000UL;
+        ULONG as_total_ns    = (as_total_ticks * TICK_PS) / 1000UL;
+        ULONG as_to_dsack_ns = (as_to_dsack_ticks * TICK_PS) / 1000UL;
         ULONG dead_time_ns   = (as_total_ns > as_to_dsack_ns) ? (as_total_ns - as_to_dsack_ns) : 0;
 
         printf("  %2d | %5s |     %d     | %4luns (%3lut) | %4luns (%3lut) |  %2lu cycles |   %2lut   |  ~%luns\n",
