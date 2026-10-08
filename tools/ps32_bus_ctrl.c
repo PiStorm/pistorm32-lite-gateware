@@ -41,7 +41,7 @@
 #define CTRL_PHASE_INV    (1 << 3)
 #define CTRL_PREFETCH_16  (1 << 7)
 
-#define VAL_NO_FAST_DSACK (CTRL_PREFETCH_32 | CTRL_CCK_SYNC | CTRL_PREFETCH_16)          /* 0x85 */
+#define VAL_NO_FAST_DSACK (CTRL_PREFETCH_32 | CTRL_PREFETCH_16) /* 0x81: No FastDSACK, No CCK Sync */          /* 0x85 */
 #define VAL_TURBO_OFF     (0x00)                                                         /* 0x00 */
 #define VAL_TURBO_ON      (CTRL_PREFETCH_32 | CTRL_FAST_DSACK | CTRL_CCK_SYNC | CTRL_PREFETCH_16) /* 0x87 */
 
