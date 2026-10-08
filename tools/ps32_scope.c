@@ -80,7 +80,7 @@ static int alloc_pen_count = 0;
 static LONG alloc_color(ULONG r, ULONG g, ULONG b, LONG fallback) {
     if (GfxBase && GfxBase->LibNode.lib_Version >= 39 && cm) {
         struct TagItem tags[] = {
-            { OBP_Precision, PRECISION_EXACT },
+            { OBP_Precision, PRECISION_IMAGE },
             { TAG_DONE, 0 }
         };
         LONG p = ObtainBestPenA(cm, r << 24, g << 24, b << 24, tags);
@@ -95,28 +95,28 @@ static LONG alloc_color(ULONG r, ULONG g, ULONG b, LONG fallback) {
 static void init_pens(struct Screen *scr) {
     cm = scr->ViewPort.ColorMap;
     if (GfxBase->LibNode.lib_Version >= 39) {
-        pen_bg       = alloc_color(0x0e, 0x12, 0x1a, 0); // Deep dark slate
-        pen_grid     = alloc_color(0x22, 0x2c, 0x3d, 1); // Dark blue-grey grid
-        pen_text     = alloc_color(0xf0, 0xf6, 0xfc, 1); // Crisp white
-        pen_text_dim = alloc_color(0x76, 0x83, 0x90, 2); // Dim grey
-        pen_clk      = alloc_color(0x00, 0xd4, 0xd4, 3); // Bright Cyan
-        pen_as       = alloc_color(0x00, 0xff, 0x66, 2); // Bright Neon Green
-        pen_ds       = alloc_color(0xff, 0xb8, 0x00, 3); // Amber Gold
-        pen_dsack    = alloc_color(0xff, 0x33, 0x88, 1); // Vivid Pink/Magenta
-        pen_data     = alloc_color(0x38, 0x8b, 0xfd, 2); // Sky Blue
-        pen_accent   = alloc_color(0xa3, 0x71, 0xf7, 3); // Purple accent
+        pen_bg       = alloc_color(0x06, 0x0a, 0x12, 1); // Pure dark background (fallback Pen 1: Black)
+        pen_grid     = alloc_color(0x1a, 0x26, 0x38, 0); // Dark blue-grey grid (fallback Pen 0: Grey)
+        pen_text     = alloc_color(0xff, 0xff, 0xff, 2); // Pure crisp white (fallback Pen 2: White)
+        pen_text_dim = alloc_color(0x88, 0xd4, 0xff, 2); // High-contrast ice blue (fallback Pen 2: White)
+        pen_clk      = alloc_color(0x00, 0xee, 0xff, 2); // Bright neon cyan
+        pen_as       = alloc_color(0x00, 0xff, 0x66, 2); // Neon lime green
+        pen_ds       = alloc_color(0xff, 0xbb, 0x00, 3); // Vivid amber gold
+        pen_dsack    = alloc_color(0xff, 0x33, 0x88, 3); // Neon magenta / hot pink
+        pen_data     = alloc_color(0x38, 0xa8, 0xff, 2); // Electric sky blue
+        pen_accent   = alloc_color(0xff, 0xee, 0x33, 2); // Electric yellow / gold
         custom_pens_allocated = 1;
     } else {
-        pen_bg       = 0;
-        pen_grid     = 1;
-        pen_text     = 1;
-        pen_text_dim = 2;
-        pen_clk      = 3;
-        pen_as       = 2;
-        pen_ds       = 3;
-        pen_dsack    = 1;
-        pen_data     = 2;
-        pen_accent   = 3;
+        pen_bg       = 1; // Black
+        pen_grid     = 0; // Grey
+        pen_text     = 2; // White
+        pen_text_dim = 2; // White
+        pen_clk      = 2; // White
+        pen_as       = 3; // Blue/Orange
+        pen_ds       = 3; // Blue/Orange
+        pen_dsack    = 2; // White
+        pen_data     = 3; // Blue/Orange
+        pen_accent   = 2; // White
     }
 }
 
@@ -174,6 +174,8 @@ static void draw_bus_box(int x0, int y_mid, int height, int start_x, int end_x, 
 
     if (label && (end_x - start_x > 30)) {
         SetAPen(rp, pen_text);
+        SetBPen(rp, pen_bg);
+        SetDrMd(rp, JAM2);
         Move(rp, x0 + start_x + (end_x - start_x) / 2 - 16, y_mid + 3);
         Text(rp, (STRPTR)label, strlen(label));
     }
@@ -225,6 +227,7 @@ static void render_scope(int is_frozen) {
     int w    = win->Width - win->BorderLeft - win->BorderRight - 16;
 
     SetDrMd(rp, JAM2);
+    SetBPen(rp, pen_bg);
 
     /* 1. Top Header Banner */
     SetAPen(rp, pen_bg);
@@ -232,6 +235,7 @@ static void render_scope(int is_frozen) {
 
     char buf[128];
     SetAPen(rp, pen_accent);
+    SetBPen(rp, pen_bg);
     Move(rp, left + 4, top + 11);
     Text(rp, (STRPTR)"PISTORM32-LITE 182 MHz BUS TIMING ANALYZER", 43);
 
@@ -272,6 +276,7 @@ static void render_scope(int is_frozen) {
         if (ns % 200 == 0) {
             snprintf(buf, sizeof(buf), "%d", ns);
             SetAPen(rp, pen_text_dim);
+            SetBPen(rp, pen_bg);
             Move(rp, gx - 8, c_y - 6);
             Text(rp, (STRPTR)buf, strlen(buf));
             SetAPen(rp, pen_grid);
@@ -280,6 +285,7 @@ static void render_scope(int is_frozen) {
 
     /* Trace 1: MC_CLK (14.18 MHz) */
     SetAPen(rp, pen_clk);
+    SetBPen(rp, pen_bg);
     Move(rp, left + 4, c_y + 16);
     Text(rp, (STRPTR)"MC_CLK", 6);
 
@@ -297,6 +303,7 @@ static void render_scope(int is_frozen) {
 
     /* Trace 2: /AS (Address Strobe) */
     SetAPen(rp, pen_as);
+    SetBPen(rp, pen_bg);
     Move(rp, left + 4, c_y + 54);
     Text(rp, (STRPTR)"/AS", 3);
 
@@ -315,6 +322,7 @@ static void render_scope(int is_frozen) {
 
     /* Trace 3: /DS (Data Strobe) */
     SetAPen(rp, pen_ds);
+    SetBPen(rp, pen_bg);
     Move(rp, left + 4, c_y + 92);
     Text(rp, (STRPTR)"/DS", 3);
 
@@ -328,6 +336,7 @@ static void render_scope(int is_frozen) {
 
     /* Trace 4: /DSACK (Acknowledge from Slave) */
     SetAPen(rp, pen_dsack);
+    SetBPen(rp, pen_bg);
     Move(rp, left + 4, c_y + 130);
     Text(rp, (STRPTR)"/DSACK", 6);
 
@@ -344,6 +353,7 @@ static void render_scope(int is_frozen) {
 
     /* Trace 5: R/W */
     SetAPen(rp, pen_text);
+    SetBPen(rp, pen_bg);
     Move(rp, left + 4, c_y + 168);
     Text(rp, (STRPTR)"R/W", 3);
     int rw_trans[] = {
@@ -353,12 +363,14 @@ static void render_scope(int is_frozen) {
 
     /* Trace 6: DATA[31:0] Bus Window */
     SetAPen(rp, pen_data);
+    SetBPen(rp, pen_bg);
     Move(rp, left + 4, c_y + 206);
     Text(rp, (STRPTR)"DATA", 4);
     int data_start = is_read ? dsack_px : ds_start_px;
     draw_bus_box(c_x, c_y + 204, 16, data_start, as_end_px, is_read ? "READ DATA" : "WRITE DATA", pen_data);
 
     /* Phase S markers above /AS */
+    SetBPen(rp, pen_bg);
     SetAPen(rp, pen_accent);
     Move(rp, c_x + 8, c_y + 36); Text(rp, (STRPTR)"S0", 2);
     Move(rp, c_x + as_start_px + 2, c_y + 36); Text(rp, (STRPTR)"S1", 2);
@@ -379,28 +391,30 @@ static void render_scope(int is_frozen) {
     SetAPen(rp, pen_grid);
     Move(rp, left, b_y); Draw(rp, left + w, b_y);
 
-    SetAPen(rp, pen_text);
+    SetBPen(rp, pen_bg);
+    SetAPen(rp, pen_accent);
     snprintf(buf, sizeof(buf), "HARDWARE MEASUREMENTS (5.5ns Resolution):");
     Move(rp, left + 4, b_y + 14); Text(rp, (STRPTR)buf, strlen(buf));
 
-    snprintf(buf, sizeof(buf), "  /AS: %luns (%lu ticks) | S3 Wait States: %lu (%luns) | Raw DSACK: %s",
-             as_ns, as_ticks, ws_14m, ws_14m * 70UL, dsack_at_high ? "HIGH (Phase S4/S2)" : "LOW (Phase S3/S1)");
+    SetAPen(rp, pen_text);
+    snprintf(buf, sizeof(buf), "  /AS: %luns (%lut) | S3 WaitStates: %lu (%luns) | Raw DSACK: %s",
+             as_ns, as_ticks, ws_14m, ws_14m * 70UL, dsack_at_high ? "HIGH (S4/S2)" : "LOW (S3/S1)");
     Move(rp, left + 4, b_y + 29); Text(rp, (STRPTR)buf, strlen(buf));
 
-    snprintf(buf, sizeof(buf), "  14MHz Clock: %lu.%02lu MHz (Period %luns, High %luns, Low %luns) | CCK Phase: %d",
+    snprintf(buf, sizeof(buf), "  14MHz Clock: %lu.%02lu MHz (Per %luns, Hi %luns, Lo %luns) | CCK Phase: %d",
              (1000000UL / (clk_per_ns ? clk_per_ns : 70)) / 1000UL,
              ((1000000UL / (clk_per_ns ? clk_per_ns : 70)) % 1000UL) / 10UL,
              clk_per_ns, (clk_hi_t * 5495UL) / 1000UL, (clk_lo_t * 5495UL) / 1000UL, cck_phase);
     Move(rp, left + 4, b_y + 44); Text(rp, (STRPTR)buf, strlen(buf));
 
     ULONG hit_pct = (launch > 0) ? (hits * 100UL) / launch : 0;
-    snprintf(buf, sizeof(buf), "  Prefetch Engine: Launches: %lu | Hits: %lu (%lu%%) | S4 Hold: %s",
-             launch, hits, hit_pct, fast_dsack_en ? "BYPASSED (Turbo)" : "ACTIVE (Mediator Safe)");
+    snprintf(buf, sizeof(buf), "  Prefetch: %lu reqs, %lu hits (%lu%%) | S4 Hold: %s",
+             launch, hits, hit_pct, fast_dsack_en ? "BYPASS (Turbo)" : "ACTIVE (Safe)");
     Move(rp, left + 4, b_y + 59); Text(rp, (STRPTR)buf, strlen(buf));
 
     /* Key commands banner */
-    SetAPen(rp, pen_accent);
-    snprintf(buf, sizeof(buf), "KEYS: [R] Test Read  [W] Test Write  [1] Turbo ON  [2] NoFastDSACK  [3] Stock  [Space] Freeze  [Q] Exit");
+    SetAPen(rp, pen_clk);
+    snprintf(buf, sizeof(buf), "KEYS: [R]Read [W]Write [1]Turbo [2]Safe [3]Stock [SPC]Freeze [Q]Quit");
     Move(rp, left + 4, b_y + 74); Text(rp, (STRPTR)buf, strlen(buf));
 }
 
@@ -478,6 +492,14 @@ int main(int argc, char **argv) {
 
     rp = win->RPort;
 
+    int c_left = win->BorderLeft;
+    int c_top  = win->BorderTop;
+    int c_w    = win->Width - win->BorderLeft - win->BorderRight;
+    int c_h    = win->Height - win->BorderTop - win->BorderBottom;
+    SetAPen(rp, pen_bg);
+    SetBPen(rp, pen_bg);
+    RectFill(rp, c_left, c_top, c_left + c_w - 1, c_top + c_h - 1);
+
     /* Allocate small test chip buffer for live triggering */
     volatile ULONG *chip_test_buf = (volatile ULONG *)AllocMem(1024, MEMF_CHIP | MEMF_CLEAR);
 
@@ -530,7 +552,10 @@ int main(int argc, char **argv) {
                 }
             }
         }
-        Wait(1 << win->UserPort->mp_SigBit);
+        ULONG sigs = Wait((1 << win->UserPort->mp_SigBit) | SIGBREAKF_CTRL_C);
+        if (sigs & SIGBREAKF_CTRL_C) {
+            running = 0;
+        }
     }
 
     if (chip_test_buf) {
