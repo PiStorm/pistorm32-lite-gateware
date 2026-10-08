@@ -51,5 +51,6 @@ amiga_tools:
 	$(M68K_CC) $(M68K_CFLAGS) -DMODE_TURBO_OFF     tools/ps32_bus_ctrl.c -o tools/PS32_Turbo_OFF
 	$(M68K_CC) $(M68K_CFLAGS) -DMODE_TURBO_ON      tools/ps32_bus_ctrl.c -o tools/PS32_Turbo_ON
 	$(M68K_CC) $(M68K_CFLAGS)                      tools/ps32_bus_ctrl.c -o tools/PS32_BusCtrl
+	$(M68K_CC) $(M68K_CFLAGS) tools/ps32_scope.c -o tools/PS32Scope
 
 .PHONY: all build run test bench trace waveforms clean bitstream amiga_tools
