@@ -134,8 +134,12 @@ wire        set_execute_slot_val;           // Slot pointer manual override valu
 // -----------------------------------------------------------------------------
 // Slot Completion Interconnect: m68k_interface -> pi_interface
 // -----------------------------------------------------------------------------
+wire        slot0_complete_valid;           // Slot 0 completion pulse
+wire        slot1_complete_valid;           // Slot 1 completion pulse
 wire        slot_complete_valid;            // Combinatorial termination pulse
 wire        slot_complete_id;               // Slot ID being completed
+wire [31:0] slot0_complete_data;            // Slot 0 read data to buffer in slot
+wire [31:0] slot1_complete_data;            // Slot 1 read data to buffer in slot
 wire [31:0] slot_complete_data;             // Read data to buffer in slot
 wire        slot_complete_normally;         // 1 = Normal (DSACK), 0 = Bus Error (BERR)
 
@@ -172,6 +176,10 @@ wire        phase_calibrated;
 wire        fast_read_phase_cal;
 wire        current_cck_phase;
 wire        counter_clear;
+wire [7:0]  prefetch_addr_hi;
+wire        new_req_pf_match;
+wire        req_is_chip_or_custom_0;
+wire        req_is_chip_or_custom_1;
 
 // 1. Raspberry Pi Interface Submodule
 pi_interface u_pi (
@@ -229,14 +237,23 @@ pi_interface u_pi (
     .req_rw_1                       (req_rw_1),
     .req_fc_0                       (req_fc_0),
     .req_fc_1                       (req_fc_1),
+    .prefetch_addr_hi               (prefetch_addr_hi),
+    .enable_16bit_prefetch          (enable_word_prefetch),
+    .req_is_chip_or_custom_0        (req_is_chip_or_custom_0),
+    .req_is_chip_or_custom_1        (req_is_chip_or_custom_1),
+    .new_req_pf_match               (new_req_pf_match),
 
     // Slot pointer override
     .set_execute_slot_valid         (set_execute_slot_valid),
     .set_execute_slot_val           (set_execute_slot_val),
 
     // Slot completion from m68k
+    .slot0_complete_valid           (slot0_complete_valid),
+    .slot1_complete_valid           (slot1_complete_valid),
     .slot_complete_valid            (slot_complete_valid),
     .slot_complete_id               (slot_complete_id),
+    .slot0_complete_data            (slot0_complete_data),
+    .slot1_complete_data            (slot1_complete_data),
     .slot_complete_data             (slot_complete_data),
     .slot_complete_normally         (slot_complete_normally)
 );
@@ -368,6 +385,10 @@ m68k_interface u_m68k (
     .req_rw_1                       (req_rw_1),
     .req_fc_0                       (req_fc_0),
     .req_fc_1                       (req_fc_1),
+    .req_is_chip_or_custom_0        (req_is_chip_or_custom_0),
+    .req_is_chip_or_custom_1        (req_is_chip_or_custom_1),
+    .new_req_pf_match               (new_req_pf_match),
+    .prefetch_addr_hi               (prefetch_addr_hi),
     .new_req_valid                  (new_req_valid),
     .new_req_slot                   (new_req_slot),
     .new_req_addr                   (new_req_addr),
@@ -379,8 +400,12 @@ m68k_interface u_m68k (
     .set_execute_slot_val           (set_execute_slot_val),
 
     // Slot completion to pi_interface
+    .slot0_complete_valid           (slot0_complete_valid),
+    .slot1_complete_valid           (slot1_complete_valid),
     .slot_complete_valid            (slot_complete_valid),
     .slot_complete_id               (slot_complete_id),
+    .slot0_complete_data            (slot0_complete_data),
+    .slot1_complete_data            (slot1_complete_data),
     .slot_complete_data             (slot_complete_data),
     .slot_complete_normally         (slot_complete_normally),
 
