@@ -2,7 +2,7 @@
 `ifndef BUILD_VERSION_VH
 `define BUILD_VERSION_VH
 
-`define GIT_COMMIT_HASH 32'h7c9e93d2
+`define GIT_COMMIT_HASH 32'h19df0d3e
 `define GIT_DIRTY       1'b1
 `define BUILD_DATE      32'h20261008
 `define TARGET_MHZ      8'd200

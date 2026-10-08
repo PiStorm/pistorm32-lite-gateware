@@ -39,7 +39,7 @@ waveforms: trace
 	python3 scripts/vcd2wavedrom.py --preset all
 
 clean:
-	rm -rf obj_dir obj_dir_golden tb_pistorm32 sim.vcd outflow work_syn work_pnr build_version.vh
+	rm -rf obj_dir obj_dir_golden tb_pistorm32 sim.vcd outflow work_syn work_pnr build_version.vh build
 
 EFINITY_SETUP ?= /home/claude/efinity/2026.1/bin/setup.sh
 
@@ -60,4 +60,24 @@ amiga_tools:
 	$(M68K_CC) $(M68K_CFLAGS) tools/ps32_stress_test.c -o tools/PS32_StressTest
 	$(M68K_CC) $(M68K_CFLAGS) tools/bench_sram.c -o tools/BenchSRAM
 
-.PHONY: all build run test bench trace waveforms clean bitstream amiga_tools
+release: version bitstream amiga_tools
+	mkdir -p build
+	cp -f firmware.bin.gz build/firmware.bin.gz
+	@echo "Generating Emu68 C header includes..."
+	cp -f firmware.bin.gz firmware_ps32.bin.gz
+	xxd -i firmware_ps32.bin.gz > build/efinix_firmware_ps32.h
+	rm -f firmware_ps32.bin.gz
+	cp -f build/efinix_firmware_ps32.h build/firmware_ps32.h
+	cp -f tools/PS32Scope build/
+	cp -f tools/PS32_BusCtrl build/
+	cp -f tools/PS32_Turbo_ON build/
+	cp -f tools/PS32_Turbo_OFF build/
+	cp -f tools/PS32_NoFastDSACK build/
+	cp -f tools/PS32_StressTest build/
+	cp -f tools/BenchSRAM build/
+	python3 scripts/gen_release_doc.py
+	@echo ""
+	@echo "=== Release package built successfully in build/ ==="
+	@ls -lh build/
+
+.PHONY: all build run test bench trace waveforms clean bitstream amiga_tools release
