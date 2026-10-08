@@ -27,7 +27,7 @@ flowchart TD
     subgraph FPGA["PiStorm32-Lite (Efinix T20 FPGA)"]
         CDC["2-Stage CDC Synchronizer"]
         FILTER["Lockout Filter<br/><i>(3 sys_clk ticks / 16.5 ns)</i>"]
-        PLL["182 MHz sys_clk PLL<br/><i>(AMIPLL)</i>"]
+        PLL["200 MHz sys_clk PLL<br/><i>(AMIPLL, 14x)</i>"]
         FSM["m68k_interface.v<br/><i>(Dynamic Bus Sizing FSM)</i>"]
     end
 
@@ -68,7 +68,7 @@ On the `CPUCLK` line, these passives create an impedance mismatch:
 
 ### Glitch Filter Implementation
 
-In `m68k_interface.v`, `MC_CLK` is synchronized and filtered using the 182 MHz internal PLL clock:
+In `m68k_interface.v`, `MC_CLK` is synchronized and filtered using the 200 MHz internal PLL clock:
 
 ```verilog
 localparam [2:0] MC_CLK_LOCKOUT_TICKS = 3'd3;
@@ -100,9 +100,9 @@ always @(posedge clk) begin
 end
 ```
 
-- With `sys_clk` at 182 MHz ($5.49\text{ ns}$ period), there are ~13 internal ticks per 14.18 MHz `MC_CLK` cycle.
+- With `sys_clk` at 200 MHz ($5.00\text{ ns}$ period, 14x multiplier), there are exactly 14 internal ticks per 14.18 MHz `MC_CLK` cycle (7 ticks high, 7 ticks low).
 - A 2-stage synchronizer (`mc_clk_raw_sync`) removes metastability.
-- The lockout counter ignores signal changes for 3 `sys_clk` ticks ($16.5\text{ ns}$) after each valid edge, which completely blankets the 1.8V ringing dip.
+- The lockout counter ignores signal changes for 3 `sys_clk` ticks ($15.0\text{ ns}$) after each valid edge, which completely blankets the 1.8V ringing dip.
 
 **Glitch Filter Simulation Waveform (WaveDrom SVG):**
 ![Lockout Filter Waveform](waveforms/clock_glitch_filter.svg)

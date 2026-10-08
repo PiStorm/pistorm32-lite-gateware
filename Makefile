@@ -52,5 +52,7 @@ amiga_tools:
 	$(M68K_CC) $(M68K_CFLAGS) -DMODE_TURBO_ON      tools/ps32_bus_ctrl.c -o tools/PS32_Turbo_ON
 	$(M68K_CC) $(M68K_CFLAGS)                      tools/ps32_bus_ctrl.c -o tools/PS32_BusCtrl
 	$(M68K_CC) $(M68K_CFLAGS) tools/ps32_scope.c -o tools/PS32Scope
+	$(M68K_CC) $(M68K_CFLAGS) tools/ps32_stress_test.c -o tools/PS32_StressTest
+	$(M68K_CC) $(M68K_CFLAGS) tools/bench_sram.c -o tools/BenchSRAM
 
 .PHONY: all build run test bench trace waveforms clean bitstream amiga_tools

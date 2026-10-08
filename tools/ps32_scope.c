@@ -20,6 +20,8 @@
 #include <proto/expansion.h>
 #include <proto/intuition.h>
 #include <proto/graphics.h>
+#include <proto/timer.h>
+#include <devices/timer.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,6 +57,11 @@
 struct ExpansionBase *ExpansionBase = NULL;
 struct IntuitionBase *IntuitionBase = NULL;
 struct GfxBase *GfxBase = NULL;
+struct Device *TimerBase = NULL;
+
+static ULONG hw_14mhz_mhz = 14;
+static ULONG hw_14mhz_rem = 19;
+static const char *hw_mode_str = "PAL";
 
 static volatile ULONG *zdev = NULL;
 static struct Window *win = NULL;
@@ -513,8 +520,8 @@ static void render_scope(int is_frozen) {
              as_ns, as_ticks, ws_14m, ws_14m * 70UL, dsack_at_high ? "HIGH (S4/S2)" : "LOW (S3/S1)");
     Move(rp, left + 4, b_y + 29); Text(rp, (STRPTR)buf, strlen(buf));
 
-    snprintf(buf, sizeof(buf), "  14MHz Clock: %lu.%02lu MHz (Per %luns, Hi %luns, Lo %luns) | CCK Phase: %d",
-             freq_mhz, freq_rem,
+    snprintf(buf, sizeof(buf), "  14MHz Clock: %lu.%02lu MHz [%s] (Period %luns, Hi %luns, Lo %luns) | CCK Phase: %d",
+             hw_14mhz_mhz, hw_14mhz_rem, hw_mode_str,
              clk_per_ns, (clk_hi_t * TICK_PS) / 1000UL, (clk_lo_t * TICK_PS) / 1000UL, cck_phase);
     Move(rp, left + 4, b_y + 44); Text(rp, (STRPTR)buf, strlen(buf));
 
@@ -579,6 +586,39 @@ int main(int argc, char **argv) {
             zdev[ZREG_PREF_CTRL / 4] = MODE_NO_FAST_DSACK_VAL;
         } else if (strcasecmp(argv[i], "stock") == 0 || strcmp(argv[i], "3") == 0) {
             zdev[ZREG_PREF_CTRL / 4] = MODE_TURBO_OFF_VAL;
+        }
+    }
+
+    /* Calibrate motherboard clock frequency and detect PAL vs NTSC */
+    struct MsgPort *t_port = CreateMsgPort();
+    struct timerequest *t_req = t_port ? (struct timerequest *)CreateIORequest(t_port, sizeof(struct timerequest)) : NULL;
+    if (t_req && OpenDevice(TIMERNAME, UNIT_ECLOCK, (struct IORequest *)t_req, 0) == 0) {
+        TimerBase = (struct Device *)t_req->tr_node.io_Device;
+        struct EClockVal ev;
+        ULONG freq = ReadEClock(&ev);
+        ULONG full_hz = freq * 20;
+        ULONG full_10khz = (full_hz + 5000UL) / 10000UL;
+        hw_14mhz_mhz = full_10khz / 100UL;
+        hw_14mhz_rem = full_10khz % 100UL;
+        if (freq < 712000UL) {
+            hw_mode_str = "PAL";
+        } else {
+            hw_mode_str = "NTSC";
+        }
+        CloseDevice((struct IORequest *)t_req);
+        DeleteIORequest((struct IORequest *)t_req);
+        DeleteMsgPort(t_port);
+    } else {
+        if (t_req) DeleteIORequest((struct IORequest *)t_req);
+        if (t_port) DeleteMsgPort(t_port);
+        if (GfxBase && !(GfxBase->DisplayFlags & PAL)) {
+            hw_mode_str = "NTSC";
+            hw_14mhz_mhz = 14;
+            hw_14mhz_rem = 32;
+        } else {
+            hw_mode_str = "PAL";
+            hw_14mhz_mhz = 14;
+            hw_14mhz_rem = 19;
         }
     }
 

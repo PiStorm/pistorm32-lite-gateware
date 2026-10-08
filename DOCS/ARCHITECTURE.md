@@ -35,7 +35,7 @@ flowchart TD
 ## 2. Module Responsibilities
 
 ### `PS32-lite.v` (Top Level)
-- Synthesizes `sys_clk` (182 MHz) from `MC_CLK` (14.18 MHz) using the Efinix PLL (`AMIPLL`).
+- Synthesizes `sys_clk` (198.6–200.5 MHz, 14x multiplier) from `MC_CLK` using the Efinix PLL (`AMIPLL`).
 - Decodes target addresses:
   - Internal ranges (`$00E80000`–`$00E9FFFF`): routed to `zorro_device.v`.
   - External ranges (Chip RAM, chipset, ROM): routed to `m68k_interface.v`.
@@ -73,19 +73,32 @@ flowchart TD
 | Clock | Frequency | Source | Function |
 | :--- | :---: | :--- | :--- |
 | `MC_CLK` | 14.18758 MHz (PAL) / 14.31818 MHz (NTSC) | Amiga Trapdoor Pin 87 (Budgie) | Amiga bus clock reference & PLL input |
-| `sys_clk` | 182.0 MHz | Efinix PLL (`AMIPLL`, 13x multiplier) | Internal FPGA core, FSM, and Wishbone bus |
+| `sys_clk` | 198.63 MHz (PAL) / 200.45 MHz (NTSC) | Efinix PLL (`AMIPLL`, 14x multiplier) | Internal FPGA core, FSM, and Wishbone bus |
 | `PIN_CCK` | Variable (up to 50 MHz) | Raspberry Pi Host | Pi host parallel interface clock |
+
+> [!NOTE]
+> **PLL Multiplier & Frequency Calculation:**
+> The PiStorm32-lite board does not feature an onboard oscillator; its internal system clock is derived entirely from the Amiga motherboard's `MC_CLK` using Efinix `AMIPLL` configured with `multiplier=112` and `post_divider=8` (exact $\mathbf{14\times}$ multiplier):
+> - **PAL Amiga 1200:** $14.18758\text{ MHz} \times 14 = \mathbf{198.626\text{ MHz}}$ ($T = 5.035\text{ ns}$)
+> - **NTSC Amiga 1200:** $14.31818\text{ MHz} \times 14 = \mathbf{200.455\text{ MHz}}$ ($T = 4.989\text{ ns}$)
+> - **SDC Target Constraint:** $5.000\text{ ns}$ ($200.000\text{ MHz}$, colloquially "200 MHz Build")
+> 
+> **Why 14x Multiplier?**
+> A $14\times$ multiplier provides exact integer symmetry: each 14.19 MHz half-cycle consists of exactly **7 FSM ticks high and 7 FSM ticks low**, completely eliminating the half-cycle quantization jitter of the older 13x ($6.5$ ticks) build. Furthermore, 1 CCK (7.09 MHz Color Clock) cycle maps to exactly **28 FSM ticks** ($14+14$).
 
 ### Clock Domain Crossing
 - Amiga bus signals (`MC_CLK`, `MC_RESET_n`, `MC_HALT_n`, `MC_IPL_n`) use 2-stage synchronizers (`mc_clk_raw_sync`).
 - Control signals from the host Pi pass through registered inputs in `pi_interface.v`.
-- Wishbone bus transactions run synchronously on `sys_clk`.
+- Wishbone bus transactions run synchronously on `sys_clk` with full handshake support (`wb_ack_o`).
 
-### Static Timing Analysis (Efinix Efinity 2023.2)
-Target device: **Trion T20F144 C2**
+### Static Timing Analysis (Efinix Efinity 2026.1)
+Target device: **Trion T20Q144 C4**
 
-- Target frequency: 182.0 MHz ($T_{\text{period}} = 5.495\text{ ns}$)
-- Achieved $f_{\max}$: **186.3 MHz**
-- Setup slack: **+0.124 ns**
-- Hold slack: **+0.089 ns**
-- Logic utilization: ~42% of T20 capacity
+- Target constraint: 200.000 MHz ($T_{\text{period}} = 5.000\text{ ns}$)
+- Achieved $f_{\max}$: **202.347 MHz** ($T_{\min} = 4.942\text{ ns}$)
+- Setup slack: **+0.058 ns** (Met)
+- Hold slack: **+0.307 ns** (Met)
+- Device Resource Utilization:
+  - Logic Elements: **2,801 / 19,728 (14.20%)** — *over 85% free for Wishbone expansions*
+  - Block RAMs (M4K): **0 / 204 (0.00%)** — *100% (1,044 Kbits) unallocated*
+  - DSP Multipliers: **0 / 36 (0.00%)** — *100% unallocated*
