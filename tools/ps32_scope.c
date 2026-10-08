@@ -77,9 +77,26 @@ static int custom_pens_allocated = 0;
 static LONG allocated_pens[10];
 static int alloc_pen_count = 0;
 
-/* Zoom presets: Default 500ns (2.5x zoom), 1000ns (1x wide), 300ns (4x detailed) */
-static const int zoom_presets[] = { 500, 1000, 300 };
-static const char *zoom_names[] = { "500ns (2.5x)", "1000ns (1x)", "300ns (4x)" };
+#define TICK_PS 5035UL /* 5.035 ns per 198.6 MHz FPGA PLL tick (14x MC_CLK) */
+
+/* Trigger & Filtering modes: AUTO (ambient), READ (locked), WRITE (locked) */
+enum TriggerMode {
+    TRIG_AUTO = 0,
+    TRIG_READ = 1,
+    TRIG_WRITE = 2
+};
+
+static int trig_mode = TRIG_AUTO;
+static const char *trig_names[] = { "AUTO", "READ (LOCK)", "WRITE (LOCK)" };
+
+static ULONG last_write_capture = 0;
+static ULONG last_write_timing  = 0;
+static ULONG last_read_capture  = 0;
+static ULONG last_read_timing   = 0;
+
+/* Zoom presets: Default 700ns (Auto R/W: full 570ns writes and reads fit), 400ns (Turbo R), 1200ns (1x wide) */
+static const int zoom_presets[] = { 700, 400, 1200 };
+static const char *zoom_names[] = { "700ns (Auto R/W)", "400ns (Turbo R)", "1200ns (1x Wide)" };
 static int zoom_idx = 0;
 
 static LONG alloc_color(ULONG r, ULONG g, ULONG b, LONG fallback) {
@@ -196,6 +213,25 @@ static void render_scope(int is_frozen) {
     ULONG launch  = zdev[ZREG_PREF_LAUNCH / 4];
     ULONG hits    = zdev[ZREG_PREF_HIT / 4];
 
+    /* Update cached cycles based on R/W */
+    int cur_rw = (capture >> 15) & 1;
+    if (cur_rw) {
+        last_read_capture = capture;
+        last_read_timing  = timing;
+    } else {
+        last_write_capture = capture;
+        last_write_timing  = timing;
+    }
+
+    /* Apply trigger lock */
+    if (trig_mode == TRIG_WRITE && last_write_capture != 0) {
+        capture = last_write_capture;
+        timing  = last_write_timing;
+    } else if (trig_mode == TRIG_READ && last_read_capture != 0) {
+        capture = last_read_capture;
+        timing  = last_read_timing;
+    }
+
     ULONG as_ticks       = (timing >> 22) & 0x3FF;
     ULONG as_to_dsack_t  = (timing >> 12) & 0x3FF;
     ULONG ws_14m         = (timing >> 8) & 0x0F;
@@ -204,8 +240,8 @@ static void render_scope(int is_frozen) {
     int   cck_phase      = (timing >> 2) & 1;
     int   is_read        = (timing >> 1) & 1;
 
-    ULONG as_ns          = (as_ticks * 5495UL) / 1000UL;
-    ULONG as_to_dsack_ns = (as_to_dsack_t * 5495UL) / 1000UL;
+    ULONG as_ns          = (as_ticks * TICK_PS) / 1000UL;
+    ULONG as_to_dsack_ns = (as_to_dsack_t * TICK_PS) / 1000UL;
 
     ULONG addr_lo        = (capture >> 16) & 0xFF;
     ULONG seq_num        = (capture >> 24) & 0xFF;
@@ -215,7 +251,7 @@ static void render_scope(int is_frozen) {
     ULONG clk_per_t      = (clk_ph >> 16) & 0xFF;
     ULONG clk_hi_t       = (clk_ph >> 8) & 0xFF;
     ULONG clk_lo_t       = clk_ph & 0xFF;
-    ULONG clk_per_ns     = (clk_per_t * 5495UL) / 1000UL;
+    ULONG clk_per_ns     = (clk_per_t * TICK_PS) / 1000UL;
 
     int fast_dsack_en    = (ctrl >> 1) & 1;
     int pref_en          = ctrl & 1;
@@ -240,18 +276,19 @@ static void render_scope(int is_frozen) {
     RectFill(rp, left, top, left + w, top + 44);
 
     char buf[128];
+    const char *title_str = "PISTORM32-LITE BUS TIMING ANALYZER (200 MHz)";
     SetAPen(rp, pen_accent);
     SetBPen(rp, pen_bg);
     Move(rp, left + 4, top + 11);
-    Text(rp, (STRPTR)"PISTORM32-LITE 182 MHz BUS TIMING ANALYZER", 43);
+    Text(rp, (STRPTR)title_str, strlen(title_str));
 
     SetAPen(rp, is_frozen ? pen_dsack : pen_as);
     snprintf(buf, sizeof(buf), "[%s]", is_frozen ? "FREEZE (SPACE)" : "LIVE PROFILING");
-    Move(rp, left + 370, top + 11);
+    Move(rp, left + w - 150, top + 11);
     Text(rp, (STRPTR)buf, strlen(buf));
 
     SetAPen(rp, pen_text_dim);
-    snprintf(buf, sizeof(buf), "Mode: %s | Zoom: %s", mode_str, zoom_names[zoom_idx]);
+    snprintf(buf, sizeof(buf), "Mode: %s | Lock: %s | Zoom: %s", mode_str, trig_names[trig_mode], zoom_names[zoom_idx]);
     Move(rp, left + 4, top + 26);
     Text(rp, (STRPTR)buf, strlen(buf));
 
@@ -264,7 +301,8 @@ static void render_scope(int is_frozen) {
     /* 2. Waveform Canvas */
     int c_x = left + 64;
     int c_y = top + 54;
-    int c_w = 510;
+    int c_w = w - 74;
+    if (c_w < 320) c_w = 320;
     int c_h = 240;
 
     SetAPen(rp, pen_bg);
@@ -298,8 +336,8 @@ static void render_scope(int is_frozen) {
     Move(rp, left + 4, c_y + 16);
     Text(rp, (STRPTR)"MC_CLK", 6);
 
-    ULONG clk_hi_ns = (clk_hi_t * 5495UL) / 1000UL;
-    ULONG clk_lo_ns = (clk_lo_t * 5495UL) / 1000UL;
+    ULONG clk_hi_ns = (clk_hi_t * TICK_PS) / 1000UL;
+    ULONG clk_lo_ns = (clk_lo_t * TICK_PS) / 1000UL;
     if (clk_hi_ns < 15 || clk_hi_ns > 80) clk_hi_ns = 35;
     if (clk_lo_ns < 15 || clk_lo_ns > 80) clk_lo_ns = 35;
 
@@ -406,9 +444,13 @@ static void render_scope(int is_frozen) {
     int s3_px = s1_px + (35 * c_w) / max_ns;
 
     Move(rp, c_x + s0_px + 2, c_y + 36); Text(rp, (STRPTR)"S0", 2);
-    Move(rp, c_x + s1_px + 2, c_y + 36); Text(rp, (STRPTR)"S1", 2);
+    if (s2_px - s1_px >= 18) {
+        Move(rp, c_x + s1_px + 2, c_y + 36); Text(rp, (STRPTR)"S1", 2);
+    }
     Move(rp, c_x + s2_px + 2, c_y + 36); Text(rp, (STRPTR)"S2", 2);
-    Move(rp, c_x + s3_px + 2, c_y + 36); Text(rp, (STRPTR)"S3", 2);
+    if (s3_px - s2_px >= 18) {
+        Move(rp, c_x + s3_px + 2, c_y + 36); Text(rp, (STRPTR)"S3", 2);
+    }
     if (!fast_dsack_en) {
         SetAPen(rp, pen_dsack);
         int s4_px = as_end_px - (35 * c_w) / max_ns;
@@ -430,7 +472,7 @@ static void render_scope(int is_frozen) {
 
     SetBPen(rp, pen_bg);
     SetAPen(rp, pen_accent);
-    snprintf(buf, sizeof(buf), "HARDWARE MEASUREMENTS (5.5ns Resolution):");
+    snprintf(buf, sizeof(buf), "HARDWARE MEASUREMENTS (5.0ns Resolution):");
     Move(rp, left + 4, b_y + 14); Text(rp, (STRPTR)buf, strlen(buf));
 
     SetAPen(rp, pen_text);
@@ -438,10 +480,13 @@ static void render_scope(int is_frozen) {
              as_ns, as_ticks, ws_14m, ws_14m * 70UL, dsack_at_high ? "HIGH (S4/S2)" : "LOW (S3/S1)");
     Move(rp, left + 4, b_y + 29); Text(rp, (STRPTR)buf, strlen(buf));
 
+    ULONG freq_10khz = (clk_per_t > 0) ? (100000000UL / (clk_per_t * TICK_PS)) : 1419UL;
+    ULONG freq_mhz = freq_10khz / 100UL;
+    ULONG freq_rem = freq_10khz % 100UL;
+
     snprintf(buf, sizeof(buf), "  14MHz Clock: %lu.%02lu MHz (Per %luns, Hi %luns, Lo %luns) | CCK Phase: %d",
-             (1000000UL / (clk_per_ns ? clk_per_ns : 70)) / 1000UL,
-             ((1000000UL / (clk_per_ns ? clk_per_ns : 70)) % 1000UL) / 10UL,
-             clk_per_ns, (clk_hi_t * 5495UL) / 1000UL, (clk_lo_t * 5495UL) / 1000UL, cck_phase);
+             freq_mhz, freq_rem,
+             clk_per_ns, (clk_hi_t * TICK_PS) / 1000UL, (clk_lo_t * TICK_PS) / 1000UL, cck_phase);
     Move(rp, left + 4, b_y + 44); Text(rp, (STRPTR)buf, strlen(buf));
 
     ULONG hit_pct = (launch > 0) ? (hits * 100UL) / launch : 0;
@@ -451,7 +496,7 @@ static void render_scope(int is_frozen) {
 
     /* Key commands banner */
     SetAPen(rp, pen_clk);
-    snprintf(buf, sizeof(buf), "KEYS: [R]Read [W]Write [1]Turbo [2]Safe [3]Stock [Z]Zoom [SPC]Freeze [Q]Quit");
+    snprintf(buf, sizeof(buf), "KEYS: [W]Lock Write [R]Lock Read [Z]Zoom [1]Turbo [2]Safe [3]Stock [SPC]Freeze [Q]Quit");
     Move(rp, left + 4, b_y + 74); Text(rp, (STRPTR)buf, strlen(buf));
 }
 
@@ -494,6 +539,20 @@ int main(int argc, char **argv) {
         return 20;
     }
 
+    for (int i = 1; i < argc; i++) {
+        if (strcasecmp(argv[i], "write") == 0 || strcasecmp(argv[i], "w") == 0) {
+            trig_mode = TRIG_WRITE;
+        } else if (strcasecmp(argv[i], "read") == 0 || strcasecmp(argv[i], "r") == 0) {
+            trig_mode = TRIG_READ;
+        } else if (strcasecmp(argv[i], "turbo") == 0 || strcmp(argv[i], "1") == 0) {
+            zdev[ZREG_PREF_CTRL / 4] = MODE_TURBO_ON_VAL;
+        } else if (strcasecmp(argv[i], "safe") == 0 || strcmp(argv[i], "2") == 0) {
+            zdev[ZREG_PREF_CTRL / 4] = MODE_NO_FAST_DSACK_VAL;
+        } else if (strcasecmp(argv[i], "stock") == 0 || strcmp(argv[i], "3") == 0) {
+            zdev[ZREG_PREF_CTRL / 4] = MODE_TURBO_OFF_VAL;
+        }
+    }
+
     struct Screen *pub_screen = LockPubScreen(NULL);
     if (!pub_screen) {
         printf("ERROR: Could not lock default public screen!\n");
@@ -503,15 +562,35 @@ int main(int argc, char **argv) {
         return 20;
     }
 
+    WORD scr_w = pub_screen->Width;
+    WORD scr_h = pub_screen->Height;
+
+    /* Responsive window sizing:
+     * - On wide/RTG screens: 740 wide, centered
+     * - On standard 640 screens: fit screen width with 6px margin
+     * - Adapt gracefully to screen height
+     */
+    WORD win_w = 740;
+    if (win_w > scr_w - 6) {
+        win_w = scr_w - 6;
+    }
+    WORD win_left = (scr_w > win_w) ? ((scr_w - win_w) / 2) : 2;
+
+    WORD win_h = 445;
+    if (win_h > scr_h - 10) {
+        win_h = scr_h - 10;
+    }
+    WORD win_top = (scr_h > win_h) ? 18 : 2;
+
     init_pens(pub_screen);
 
     win = OpenWindowTags(NULL,
         WA_Title, (ULONG)"PiStorm32-lite Bus Scope & Logic Analyzer",
-        WA_Left, 20,
-        WA_Top, 20,
-        WA_Width, 640,
-        WA_Height, 445,
-        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_RAWKEY | IDCMP_VANILLAKEY | IDCMP_INTUITICKS,
+        WA_Left, win_left,
+        WA_Top, win_top,
+        WA_Width, win_w,
+        WA_Height, win_h,
+        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY | IDCMP_INTUITICKS,
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_ACTIVATE,
         WA_PubScreen, (ULONG)pub_screen,
         TAG_DONE);
@@ -539,6 +618,14 @@ int main(int argc, char **argv) {
 
     /* Allocate small test chip buffer for live triggering */
     volatile ULONG *chip_test_buf = (volatile ULONG *)AllocMem(1024, MEMF_CHIP | MEMF_CLEAR);
+    if (chip_test_buf) {
+        if (trig_mode == TRIG_WRITE) {
+            chip_test_buf[0] = 0xCAFEBABE;
+        } else {
+            volatile ULONG dummy = chip_test_buf[0];
+            (void)dummy;
+        }
+    }
 
     int is_frozen = 0;
     int running = 1;
@@ -555,36 +642,6 @@ int main(int argc, char **argv) {
 
             if (msg_class == IDCMP_CLOSEWINDOW) {
                 running = 0;
-            } else if (msg_class == IDCMP_RAWKEY) {
-                if (msg_code == 0x45 || msg_code == 0x10) { /* ESC or 'Q' */
-                    running = 0;
-                } else if (msg_code == 0x40) { /* Space: Freeze / Unfreeze */
-                    is_frozen = !is_frozen;
-                    render_scope(is_frozen);
-                } else if (msg_code == 0x13) { /* 'R': Test Read */
-                    if (chip_test_buf) {
-                        volatile ULONG dummy = chip_test_buf[0];
-                        (void)dummy;
-                    }
-                    render_scope(is_frozen);
-                } else if (msg_code == 0x11) { /* 'W': Test Write */
-                    if (chip_test_buf) {
-                        chip_test_buf[0] = 0xCAFEBABE;
-                    }
-                    render_scope(is_frozen);
-                } else if (msg_code == 0x01) { /* '1': Turbo ON */
-                    zdev[ZREG_PREF_CTRL / 4] = MODE_TURBO_ON_VAL;
-                    render_scope(is_frozen);
-                } else if (msg_code == 0x02) { /* '2': No Fast DSACK (Safe) */
-                    zdev[ZREG_PREF_CTRL / 4] = MODE_NO_FAST_DSACK_VAL;
-                    render_scope(is_frozen);
-                } else if (msg_code == 0x03) { /* '3': Turbo OFF */
-                    zdev[ZREG_PREF_CTRL / 4] = MODE_TURBO_OFF_VAL;
-                    render_scope(is_frozen);
-                } else if (msg_code == 0x31 || msg_code == 0x15) { /* 'Z' (US or German layout) */
-                    zoom_idx = (zoom_idx + 1) % 3;
-                    render_scope(is_frozen);
-                }
             } else if (msg_class == IDCMP_VANILLAKEY) {
                 char c = (char)msg_code;
                 if (c == 'q' || c == 'Q' || c == 0x1b) {
@@ -595,15 +652,25 @@ int main(int argc, char **argv) {
                 } else if (c == 'z' || c == 'Z') {
                     zoom_idx = (zoom_idx + 1) % 3;
                     render_scope(is_frozen);
-                } else if (c == 'r' || c == 'R') {
-                    if (chip_test_buf) {
-                        volatile ULONG dummy = chip_test_buf[0];
-                        (void)dummy;
+                } else if (c == 'w' || c == 'W') {
+                    if (trig_mode == TRIG_WRITE) {
+                        trig_mode = TRIG_AUTO;
+                    } else {
+                        trig_mode = TRIG_WRITE;
+                        if (chip_test_buf) {
+                            chip_test_buf[0] = 0xCAFEBABE;
+                        }
                     }
                     render_scope(is_frozen);
-                } else if (c == 'w' || c == 'W') {
-                    if (chip_test_buf) {
-                        chip_test_buf[0] = 0xCAFEBABE;
+                } else if (c == 'r' || c == 'R') {
+                    if (trig_mode == TRIG_READ) {
+                        trig_mode = TRIG_AUTO;
+                    } else {
+                        trig_mode = TRIG_READ;
+                        if (chip_test_buf) {
+                            volatile ULONG dummy = chip_test_buf[0];
+                            (void)dummy;
+                        }
                     }
                     render_scope(is_frozen);
                 } else if (c == '1') {
@@ -619,6 +686,12 @@ int main(int argc, char **argv) {
             } else if (msg_class == IDCMP_INTUITICKS) {
                 tick_count++;
                 if (!is_frozen && (tick_count % 2 == 0)) { /* Refresh ~5-10 times/sec */
+                    if (trig_mode == TRIG_WRITE && chip_test_buf) {
+                        chip_test_buf[0] = 0xCAFEBABE;
+                    } else if (trig_mode == TRIG_READ && chip_test_buf) {
+                        volatile ULONG dummy = chip_test_buf[0];
+                        (void)dummy;
+                    }
                     render_scope(is_frozen);
                 }
             }
