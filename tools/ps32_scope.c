@@ -41,6 +41,9 @@
 #define ZREG_BUS_CAPTURE  0x2C
 #define ZREG_CYCLE_TIMING 0x30
 #define ZREG_CLOCK_PHASE  0x34
+#define ZREG_GIT_HASH     0x38
+#define ZREG_BUILD_DATE   0x3C
+#define ZREG_BUILD_INFO   0x40
 
 #define MAGIC_PS32        0x50533332 /* 'PS32' */
 
@@ -308,12 +311,22 @@ static void render_scope(int is_frozen) {
     SetAPen(rp, pen_bg);
     RectFill(rp, left, top, left + w, top + 44);
 
+    ULONG git_hash   = zdev[ZREG_GIT_HASH / 4];
+    ULONG build_date = zdev[ZREG_BUILD_DATE / 4];
+    ULONG build_info = zdev[ZREG_BUILD_INFO / 4];
+
     char buf[128];
-    const char *title_str = "PISTORM32-LITE BUS TIMING ANALYZER (200 MHz)";
+    char title_buf[80];
+    if (git_hash != 0) {
+        snprintf(title_buf, sizeof(title_buf), "PISTORM32 BUS ANALYZER [FW: %08lx%s | %luMHz]",
+                 git_hash, (build_info & 1) ? "-d" : "", (build_info >> 8) & 0xFF);
+    } else {
+        snprintf(title_buf, sizeof(title_buf), "PISTORM32-LITE BUS TIMING ANALYZER (200 MHz)");
+    }
     SetAPen(rp, pen_accent);
     SetBPen(rp, pen_bg);
     Move(rp, left + 4, top + 11);
-    Text(rp, (STRPTR)title_str, strlen(title_str));
+    Text(rp, (STRPTR)title_buf, strlen(title_buf));
 
     SetAPen(rp, is_frozen ? pen_dsack : pen_as);
     snprintf(buf, sizeof(buf), "[%s]", is_frozen ? "FREEZE (SPACE)" : "LIVE PROFILING");
@@ -512,7 +525,12 @@ static void render_scope(int is_frozen) {
 
     SetBPen(rp, pen_bg);
     SetAPen(rp, pen_accent);
-    snprintf(buf, sizeof(buf), "HARDWARE MEASUREMENTS (5.0ns Resolution):");
+    if (git_hash != 0) {
+        snprintf(buf, sizeof(buf), "HARDWARE MEASUREMENTS (5.0ns Res) | FW: %08lx (%04lx-%02lx-%02lx):",
+                 git_hash, (build_date >> 16) & 0xFFFF, (build_date >> 8) & 0xFF, build_date & 0xFF);
+    } else {
+        snprintf(buf, sizeof(buf), "HARDWARE MEASUREMENTS (5.0ns Resolution):");
+    }
     Move(rp, left + 4, b_y + 14); Text(rp, (STRPTR)buf, strlen(buf));
 
     SetAPen(rp, pen_text);

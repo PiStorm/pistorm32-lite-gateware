@@ -32,6 +32,9 @@
 #define ZREG_STATUS       0x08
 #define ZREG_SCRATCHPAD   0x0C
 #define ZREG_PREF_CTRL    0x1C
+#define ZREG_GIT_HASH     0x38
+#define ZREG_BUILD_DATE   0x3C
+#define ZREG_BUILD_INFO   0x40
 
 #define MAGIC_PS32        0x50533332 /* 'PS32' */
 
@@ -184,6 +187,17 @@ int main(int argc, char **argv) {
         printf("  PiStorm32-lite Bus Control: %s\n", action_desc);
         printf("============================================================\n");
         printf("[OK] Found Virtual Zorro Board at: 0x%08lX\n", (ULONG)cd->cd_BoardAddr);
+
+        ULONG git_hash = zdev[ZREG_GIT_HASH / 4];
+        ULONG build_date = zdev[ZREG_BUILD_DATE / 4];
+        ULONG build_info = zdev[ZREG_BUILD_INFO / 4];
+        if (git_hash != 0) {
+            printf("Firmware: Commit %08lx%s (Built %04lx-%02lx-%02lx | Target %lu MHz, %lux PLL)\n",
+                   git_hash, (build_info & 1) ? "-dirty" : "",
+                   (build_date >> 16) & 0xFFFF, (build_date >> 8) & 0xFF, build_date & 0xFF,
+                   (build_info >> 8) & 0xFF, (build_info >> 4) & 0x0F);
+        }
+
         if (target_mode == 1) {
             printf("Previous BUS_CTRL: 0x%02lX\n", prev_val);
             printf("New BUS_CTRL:      0x%02lX\n\n", new_val);

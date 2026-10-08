@@ -5,6 +5,24 @@
  * Copyright 2022-2026 Claude Schwarz
  */
 
+`include "build_version.vh"
+
+`ifndef GIT_COMMIT_HASH
+`define GIT_COMMIT_HASH 32'h00000000
+`endif
+`ifndef GIT_DIRTY
+`define GIT_DIRTY       1'b0
+`endif
+`ifndef BUILD_DATE
+`define BUILD_DATE      32'h00000000
+`endif
+`ifndef TARGET_MHZ
+`define TARGET_MHZ      8'd200
+`endif
+`ifndef PLL_MULT
+`define PLL_MULT        4'd14
+`endif
+
 module zorro_device #(
     parameter [15:0] Z2_MANUF_ID = 16'd28020, // Assigned Manufacturer ID: 28020 (0x6D74)
     parameter [7:0]  Z2_PROD_ID  = 8'h32,     // PiStorm32 Product ID: 0x32
@@ -491,6 +509,9 @@ module zorro_device #(
                     5'h0B: s0_reg_data <= diag_bus_capture;          // +$2C: DIAG_BUS_CAPTURE
                     5'h0C: s0_reg_data <= diag_cycle_timing;        // +$30: DIAG_CYCLE_TIMING
                     5'h0D: s0_reg_data <= diag_clock_phase;         // +$34: DIAG_CLOCK_PHASE
+                    5'h0E: s0_reg_data <= `GIT_COMMIT_HASH;         // +$38: GIT_HASH
+                    5'h0F: s0_reg_data <= `BUILD_DATE;              // +$3C: BUILD_DATE
+                    5'h10: s0_reg_data <= {16'h5053, `TARGET_MHZ, `PLL_MULT, 3'd0, `GIT_DIRTY}; // +$40: BUILD_INFO
                     default: s0_reg_data <= 32'd0;
                 endcase
 

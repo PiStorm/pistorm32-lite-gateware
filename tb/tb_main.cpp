@@ -1881,6 +1881,15 @@ int main(int argc, char** argv) {
         TEST_ASSERT(((base_status >> 16) & 0xFF) == 0xE9 && (base_status & 1) == 1,
                     "Virtual IO: Base/Status register at offset 8 matches base 0xE90000 and configured=1");
 
+        uint32_t git_hash = pi->ps32_read_32(0x00E90038);
+        TEST_ASSERT(git_hash != 0, "Virtual IO: Git commit hash register at offset 0x38 is non-zero");
+
+        uint32_t build_date = pi->ps32_read_32(0x00E9003C);
+        TEST_ASSERT(((build_date >> 24) & 0xFF) == 0x20, "Virtual IO: Build date BCD register at offset 0x3C starts with century 20xx");
+
+        uint32_t build_info = pi->ps32_read_32(0x00E90040);
+        TEST_ASSERT(((build_info >> 16) & 0xFFFF) == 0x5053, "Virtual IO: Build info register at offset 0x40 matches 'PS'");
+
         // Scratchpad R/W testing
         pi->ps32_write_32(0x00E9000C, 0xCAFEBABE);
         pi->flush_pending_writes();

@@ -23,6 +23,9 @@ static volatile ULONG *zorro_dev = NULL;
 #define ZREG_DIAG_STATUS 0x20
 #define ZREG_PREF_LAUNCH 0x24
 #define ZREG_PREF_HIT    0x28
+#define ZREG_GIT_HASH    0x38
+#define ZREG_BUILD_DATE  0x3C
+#define ZREG_BUILD_INFO  0x40
 
 static int init_timer(void) {
     timerPort = CreateMsgPort();
@@ -187,6 +190,15 @@ int main(void) {
         return 20;
     }
     printf("[HW] Virtual Zorro-II Board located at: 0x%08lX\n", (ULONG)zorro_dev);
+    ULONG git_hash   = zorro_dev[ZREG_GIT_HASH / 4];
+    ULONG build_date = zorro_dev[ZREG_BUILD_DATE / 4];
+    ULONG build_info = zorro_dev[ZREG_BUILD_INFO / 4];
+    if (git_hash != 0) {
+        printf("[HW] Firmware Commit: %08lx%s (Built %04lx-%02lx-%02lx | Target %lu MHz, %lux PLL)\n",
+               git_hash, (build_info & 1) ? "-dirty" : "",
+               (build_date >> 16) & 0xFFFF, (build_date >> 8) & 0xFF, build_date & 0xFF,
+               (build_info >> 8) & 0xFF, (build_info >> 4) & 0x0F);
+    }
     ULONG init_ctrl = zorro_dev[ZREG_PREF_CTRL / 4];
     printf("[HW] Initial BUS_CTRL: 0x%08lX\n\n", init_ctrl);
 

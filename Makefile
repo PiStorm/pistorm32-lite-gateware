@@ -16,7 +16,10 @@ golden_lib:
 	$(VERILATOR) $(VERILATOR_GOLDEN_FLAGS)
 	$(MAKE) -C obj_dir_golden -f Vpistorm_golden.mk
 
-build: golden_lib
+version:
+	python3 scripts/gen_build_version.py
+
+build: version golden_lib
 	$(VERILATOR) $(VERILATOR_FLAGS)
 	$(MAKE) -C obj_dir -f Vpistorm.mk
 
@@ -36,10 +39,12 @@ waveforms: trace
 	python3 scripts/vcd2wavedrom.py --preset all
 
 clean:
-	rm -rf obj_dir obj_dir_golden tb_pistorm32 sim.vcd outflow work_syn work_pnr
+	rm -rf obj_dir obj_dir_golden tb_pistorm32 sim.vcd outflow work_syn work_pnr build_version.vh
 
-bitstream:
-	efx_run --prj -f compile PS32-lite
+EFINITY_SETUP ?= /home/claude/efinity/2026.1/bin/setup.sh
+
+bitstream: version
+	bash -c "if command -v efx_run >/dev/null 2>&1; then efx_run --prj -f compile PS32-lite; elif [ -f $(EFINITY_SETUP) ]; then source $(EFINITY_SETUP) && efx_run --prj -f compile PS32-lite; else echo 'ERROR: efx_run not found'; exit 1; fi"
 	gzip -c -9 outflow/PS32-lite.hex.bin > firmware.bin.gz
 
 M68K_CC ?= /opt/amiga/bin/m68k-amigaos-gcc
