@@ -77,6 +77,11 @@ static int custom_pens_allocated = 0;
 static LONG allocated_pens[10];
 static int alloc_pen_count = 0;
 
+/* Zoom presets: Default 500ns (2.5x zoom), 1000ns (1x wide), 300ns (4x detailed) */
+static const int zoom_presets[] = { 500, 1000, 300 };
+static const char *zoom_names[] = { "500ns (2.5x)", "1000ns (1x)", "300ns (4x)" };
+static int zoom_idx = 0;
+
 static LONG alloc_color(ULONG r, ULONG g, ULONG b, LONG fallback) {
     if (GfxBase && GfxBase->LibNode.lib_Version >= 39 && cm) {
         struct TagItem tags[] = {
@@ -150,7 +155,7 @@ static void draw_digital_trace(int x0, int y_high, int y_low, int width, const i
     }
 }
 
-static void draw_bus_box(int x0, int y_mid, int height, int start_x, int end_x, const char *label, LONG pen) {
+static void draw_bus_box(int x0, int y_mid, int height, int start_x, int end_x, int max_w, const char *label, LONG pen) {
     int top = y_mid - height / 2;
     int bot = y_mid + height / 2;
     SetAPen(rp, pen);
@@ -170,7 +175,7 @@ static void draw_bus_box(int x0, int y_mid, int height, int start_x, int end_x, 
     Move(rp, x0, y_mid);
     Draw(rp, x0 + start_x - 4, y_mid);
     Move(rp, x0 + end_x + 4, y_mid);
-    Draw(rp, x0 + 510, y_mid);
+    Draw(rp, x0 + max_w, y_mid);
 
     if (label && (end_x - start_x > 30)) {
         SetAPen(rp, pen_text);
@@ -225,6 +230,7 @@ static void render_scope(int is_frozen) {
     int left = win->BorderLeft + 8;
     int top  = win->BorderTop + 4;
     int w    = win->Width - win->BorderLeft - win->BorderRight - 16;
+    int max_ns = zoom_presets[zoom_idx];
 
     SetDrMd(rp, JAM2);
     SetBPen(rp, pen_bg);
@@ -245,7 +251,7 @@ static void render_scope(int is_frozen) {
     Text(rp, (STRPTR)buf, strlen(buf));
 
     SetAPen(rp, pen_text_dim);
-    snprintf(buf, sizeof(buf), "Mode: %s", mode_str);
+    snprintf(buf, sizeof(buf), "Mode: %s | Zoom: %s", mode_str, zoom_names[zoom_idx]);
     Move(rp, left + 4, top + 26);
     Text(rp, (STRPTR)buf, strlen(buf));
 
@@ -264,20 +270,23 @@ static void render_scope(int is_frozen) {
     SetAPen(rp, pen_bg);
     RectFill(rp, left, c_y - 4, left + w, c_y + c_h + 10);
 
-    /* Draw Scope Graticule (100 ns grid lines) */
-    /* Scale: 500 pixels = 1250 ns -> 100 ns = 40 pixels (0.4 px/ns) */
+    /* Draw Scope Graticule (dynamic scale) */
+    int grid_step = (max_ns <= 300) ? 25 : (max_ns <= 600) ? 50 : 100;
+    int label_step = (max_ns <= 300) ? 50 : (max_ns <= 600) ? 100 : 200;
+
     SetAPen(rp, pen_grid);
-    for (int ns = 0; ns <= 1250; ns += 100) {
-        int gx = c_x + (ns * 4) / 10;
+    for (int ns = 0; ns <= max_ns; ns += grid_step) {
+        int gx = c_x + (ns * c_w) / max_ns;
+        if (gx > c_x + c_w) break;
         Move(rp, gx, c_y);
         Draw(rp, gx, c_y + c_h);
 
         /* Time markers at top */
-        if (ns % 200 == 0) {
+        if (ns % label_step == 0) {
             snprintf(buf, sizeof(buf), "%d", ns);
             SetAPen(rp, pen_text_dim);
             SetBPen(rp, pen_bg);
-            Move(rp, gx - 8, c_y - 6);
+            Move(rp, gx - (ns >= 100 ? 12 : 4), c_y - 6);
             Text(rp, (STRPTR)buf, strlen(buf));
             SetAPen(rp, pen_grid);
         }
@@ -289,15 +298,25 @@ static void render_scope(int is_frozen) {
     Move(rp, left + 4, c_y + 16);
     Text(rp, (STRPTR)"MC_CLK", 6);
 
-    int clk_half = 14; /* 70ns period = 28px -> half = 14px */
-    int clk_trans[40];
+    ULONG clk_hi_ns = (clk_hi_t * 5495UL) / 1000UL;
+    ULONG clk_lo_ns = (clk_lo_t * 5495UL) / 1000UL;
+    if (clk_hi_ns < 15 || clk_hi_ns > 80) clk_hi_ns = 35;
+    if (clk_lo_ns < 15 || clk_lo_ns > 80) clk_lo_ns = 35;
+
+    int clk_trans[60];
     int t_idx = 0;
-    clk_trans[t_idx++] = 0; /* start low */
-    int cx = 0;
-    for (int k = 0; k < 18; k++) {
-        cx += clk_half;
-        clk_trans[t_idx++] = cx;
-        clk_trans[t_idx++] = (k % 2 == 0) ? 1 : 0;
+    int cur_clk_val = 0; /* start low */
+    clk_trans[t_idx++] = cur_clk_val;
+
+    int cur_ns = 0;
+    while (cur_ns < max_ns && t_idx < 56) {
+        cur_ns += cur_clk_val ? clk_hi_ns : clk_lo_ns;
+        int px = (cur_ns * c_w) / max_ns;
+        if (px > c_w) px = c_w;
+        cur_clk_val = !cur_clk_val;
+        clk_trans[t_idx++] = px;
+        clk_trans[t_idx++] = cur_clk_val;
+        if (px >= c_w) break;
     }
     draw_digital_trace(c_x, c_y + 6, c_y + 22, c_w, clk_trans, t_idx, pen_clk);
 
@@ -307,11 +326,12 @@ static void render_scope(int is_frozen) {
     Move(rp, left + 4, c_y + 54);
     Text(rp, (STRPTR)"/AS", 3);
 
-    int as_start_px = 28;
-    int as_width_px = (as_ns * 4) / 10;
-    if (as_width_px < 20) as_width_px = 227; /* default fallback ~569ns */
-    if (as_width_px > c_w - as_start_px - 10) as_width_px = c_w - as_start_px - 10;
+    int as_start_ns = 35;
+    int as_start_px = (as_start_ns * c_w) / max_ns;
+    int as_width_px = (as_ns * c_w) / max_ns;
+    if (as_width_px < 10) as_width_px = (230 * c_w) / max_ns;
     int as_end_px = as_start_px + as_width_px;
+    if (as_end_px > c_w) as_end_px = c_w;
 
     int as_trans[] = {
         1, /* starts high */
@@ -326,7 +346,10 @@ static void render_scope(int is_frozen) {
     Move(rp, left + 4, c_y + 92);
     Text(rp, (STRPTR)"/DS", 3);
 
-    int ds_start_px = is_read ? as_start_px : (as_start_px + 28);
+    int ds_start_ns = is_read ? as_start_ns : (as_start_ns + clk_hi_ns);
+    int ds_start_px = (ds_start_ns * c_w) / max_ns;
+    if (ds_start_px > as_end_px) ds_start_px = as_start_px;
+
     int ds_trans[] = {
         1, /* starts high */
         ds_start_px, 0,
@@ -340,14 +363,18 @@ static void render_scope(int is_frozen) {
     Move(rp, left + 4, c_y + 130);
     Text(rp, (STRPTR)"/DSACK", 6);
 
-    int dsack_px = as_start_px + (as_to_dsack_ns * 4) / 10;
-    if (dsack_px <= as_start_px) dsack_px = as_start_px + 140;
-    if (dsack_px >= as_end_px) dsack_px = as_end_px - 20;
+    int dsack_start_ns = as_start_ns + as_to_dsack_ns;
+    int dsack_px = (dsack_start_ns * c_w) / max_ns;
+    if (dsack_px <= as_start_px) dsack_px = as_start_px + (20 * c_w) / max_ns;
+    if (dsack_px >= as_end_px) dsack_px = as_end_px - (10 * c_w) / max_ns;
+
+    int dsack_end_px = as_end_px + (15 * c_w) / max_ns;
+    if (dsack_end_px > c_w) dsack_end_px = c_w;
 
     int dsack_trans[] = {
         1,
-        dsack_px,  0,
-        as_end_px + 8, 1
+        dsack_px,     0,
+        dsack_end_px, 1
     };
     draw_digital_trace(c_x, c_y + 118, c_y + 134, c_w, dsack_trans, 5, pen_dsack);
 
@@ -367,18 +394,28 @@ static void render_scope(int is_frozen) {
     Move(rp, left + 4, c_y + 206);
     Text(rp, (STRPTR)"DATA", 4);
     int data_start = is_read ? dsack_px : ds_start_px;
-    draw_bus_box(c_x, c_y + 204, 16, data_start, as_end_px, is_read ? "READ DATA" : "WRITE DATA", pen_data);
+    draw_bus_box(c_x, c_y + 204, 16, data_start, as_end_px, c_w, is_read ? "READ DATA" : "WRITE DATA", pen_data);
 
     /* Phase S markers above /AS */
     SetBPen(rp, pen_bg);
     SetAPen(rp, pen_accent);
-    Move(rp, c_x + 8, c_y + 36); Text(rp, (STRPTR)"S0", 2);
-    Move(rp, c_x + as_start_px + 2, c_y + 36); Text(rp, (STRPTR)"S1", 2);
-    Move(rp, c_x + as_start_px + 16, c_y + 36); Text(rp, (STRPTR)"S2", 2);
-    Move(rp, c_x + as_start_px + 30, c_y + 36); Text(rp, (STRPTR)"S3", 2);
+
+    int s0_px = ((as_start_ns >= 35 ? as_start_ns - 35 : 0) * c_w) / max_ns;
+    int s1_px = (as_start_ns * c_w) / max_ns;
+    int s2_px = s1_px + (18 * c_w) / max_ns;
+    int s3_px = s1_px + (35 * c_w) / max_ns;
+
+    Move(rp, c_x + s0_px + 2, c_y + 36); Text(rp, (STRPTR)"S0", 2);
+    Move(rp, c_x + s1_px + 2, c_y + 36); Text(rp, (STRPTR)"S1", 2);
+    Move(rp, c_x + s2_px + 2, c_y + 36); Text(rp, (STRPTR)"S2", 2);
+    Move(rp, c_x + s3_px + 2, c_y + 36); Text(rp, (STRPTR)"S3", 2);
     if (!fast_dsack_en) {
         SetAPen(rp, pen_dsack);
-        Move(rp, c_x + as_end_px - 36, c_y + 36); Text(rp, (STRPTR)"S4(NOP)", 7);
+        int s4_px = as_end_px - (35 * c_w) / max_ns;
+        if (s4_px > s3_px + 20) {
+            Move(rp, c_x + s4_px, c_y + 36);
+            Text(rp, (STRPTR)"S4(NOP)", 7);
+        }
     }
     SetAPen(rp, pen_accent);
     Move(rp, c_x + as_end_px - 8, c_y + 36); Text(rp, (STRPTR)"S5", 2);
@@ -414,7 +451,7 @@ static void render_scope(int is_frozen) {
 
     /* Key commands banner */
     SetAPen(rp, pen_clk);
-    snprintf(buf, sizeof(buf), "KEYS: [R]Read [W]Write [1]Turbo [2]Safe [3]Stock [SPC]Freeze [Q]Quit");
+    snprintf(buf, sizeof(buf), "KEYS: [R]Read [W]Write [1]Turbo [2]Safe [3]Stock [Z]Zoom [SPC]Freeze [Q]Quit");
     Move(rp, left + 4, b_y + 74); Text(rp, (STRPTR)buf, strlen(buf));
 }
 
@@ -474,7 +511,7 @@ int main(int argc, char **argv) {
         WA_Top, 20,
         WA_Width, 640,
         WA_Height, 445,
-        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_RAWKEY | IDCMP_INTUITICKS,
+        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_RAWKEY | IDCMP_VANILLAKEY | IDCMP_INTUITICKS,
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_ACTIVATE,
         WA_PubScreen, (ULONG)pub_screen,
         TAG_DONE);
@@ -542,6 +579,40 @@ int main(int argc, char **argv) {
                     zdev[ZREG_PREF_CTRL / 4] = MODE_NO_FAST_DSACK_VAL;
                     render_scope(is_frozen);
                 } else if (msg_code == 0x03) { /* '3': Turbo OFF */
+                    zdev[ZREG_PREF_CTRL / 4] = MODE_TURBO_OFF_VAL;
+                    render_scope(is_frozen);
+                } else if (msg_code == 0x31 || msg_code == 0x15) { /* 'Z' (US or German layout) */
+                    zoom_idx = (zoom_idx + 1) % 3;
+                    render_scope(is_frozen);
+                }
+            } else if (msg_class == IDCMP_VANILLAKEY) {
+                char c = (char)msg_code;
+                if (c == 'q' || c == 'Q' || c == 0x1b) {
+                    running = 0;
+                } else if (c == ' ') {
+                    is_frozen = !is_frozen;
+                    render_scope(is_frozen);
+                } else if (c == 'z' || c == 'Z') {
+                    zoom_idx = (zoom_idx + 1) % 3;
+                    render_scope(is_frozen);
+                } else if (c == 'r' || c == 'R') {
+                    if (chip_test_buf) {
+                        volatile ULONG dummy = chip_test_buf[0];
+                        (void)dummy;
+                    }
+                    render_scope(is_frozen);
+                } else if (c == 'w' || c == 'W') {
+                    if (chip_test_buf) {
+                        chip_test_buf[0] = 0xCAFEBABE;
+                    }
+                    render_scope(is_frozen);
+                } else if (c == '1') {
+                    zdev[ZREG_PREF_CTRL / 4] = MODE_TURBO_ON_VAL;
+                    render_scope(is_frozen);
+                } else if (c == '2') {
+                    zdev[ZREG_PREF_CTRL / 4] = MODE_NO_FAST_DSACK_VAL;
+                    render_scope(is_frozen);
+                } else if (c == '3') {
                     zdev[ZREG_PREF_CTRL / 4] = MODE_TURBO_OFF_VAL;
                     render_scope(is_frozen);
                 }
